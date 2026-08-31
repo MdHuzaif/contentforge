@@ -1,0 +1,25 @@
+# ===== Core UI =====
+gradio>=5.0,<6.0
+gradio_client>=0.17.0
+
+# ===== Config / env =====
+python-dotenv>=1.0.1
+
+# ===== HTTP clients (free LLM API calls - Level 2) =====
+httpx>=0.27.0
+requests>=2.32.0
+
+# ===== Storage (Level 3) =====
+aiosqlite>=0.20.0
+
+# ===== Data handling =====
+pandas>=2.2.0
+
+# ===== LangGraph (Level 3) =====
+langgraph>=0.2.50
+langgraph-checkpoint>=2.0.0
+langgraph-checkpoint-sqlite>=2.0.0
+langchain-core>=0.3.0
+
+# ===== Export (Level 7) =====
+xhtml2pdf>=0.2.11

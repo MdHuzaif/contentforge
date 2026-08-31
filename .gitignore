@@ -1,0 +1,86 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# Secrets / Environment (CRITICAL)
+# =========================
+.env
+.env.*
+!.env.example
+secrets.json
+credentials.json
+*.pem
+*.key
+
+# =========================
+# Local databases / memory
+# =========================
+memory/
+*.db
+*.sqlite
+*.sqlite3
+checkpoints/
+
+# =========================
+# Generated outputs
+# =========================
+results/
+content_output/
+outputs/
+generated/
+logs/
+*.log
+
+# =========================
+# Cache
+# =========================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.ipynb_checkpoints/
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =========================
+# Large files
+# =========================
+*.mp4
+*.mov
+*.avi
+*.zip
+*.rar
+*.7z
+*.tar.gz
+
+# =========================
+# Temporary files
+# =========================
+tmp/
+temp/
+*.tmp
