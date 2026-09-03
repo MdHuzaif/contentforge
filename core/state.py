@@ -35,6 +35,11 @@ class ContentForgeState(TypedDict, total=False):
     assembled_blog: str                    # Final merged markdown blog
     assembly_status: str                   # "pending" | "assembling" | "complete"
     
+    # Product Refinement System (post-processing)
+    refined_blog: str
+    refinement_report: str
+    refinement_stats: List[Dict[str, Any]]
+    
     # === Execution Config ===
     execution_mode: str                    # Always "interactive" in new architecture
     gemini_model: str                      # Which Gemini model to use (default: "gemini-3.5-flash-lite")
@@ -76,6 +81,9 @@ def create_initial_state(
         # Phase 4
         "assembled_blog": "",
         "assembly_status": "pending",
+        "refined_blog": "",
+        "refinement_report": "",
+        "refinement_stats": [],
         
         # Config
         "execution_mode": "interactive",

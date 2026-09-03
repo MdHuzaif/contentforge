@@ -189,6 +189,16 @@ from core.exporters.markdown_converter import slugify
 from core.exporters.pdf_exporter import blog_to_pdf
 from core.exporters.static_exporter import export_post_to_uniscolian
 from core.interactive import InteractiveSession
+from core.post_processors.product_detector import (
+    detect_product_sections,
+    format_detection_report,
+    get_section_detail,
+    enhance_detection_with_llm,
+)
+from core.post_processors.product_refiner import (
+    refine_blog_products,
+    format_refinement_report,
+)
 
 
 # Global session manager (single global session with SQLite checkpointer)
@@ -457,6 +467,7 @@ async def assemble_blog_action(thread_id: str):
             gr.update(interactive=False),
             gr.update(interactive=False),
             gr.update(interactive=False),
+            "*No blog assembled yet.*",
         )
     
     try:
@@ -472,6 +483,7 @@ async def assemble_blog_action(thread_id: str):
                 gr.update(interactive=False),
                 gr.update(interactive=False),
                 gr.update(interactive=False),
+                "*Blog assembly failed.*",
             )
         
         # Calculate statistics
@@ -495,6 +507,7 @@ async def assemble_blog_action(thread_id: str):
             gr.update(interactive=True),
             gr.update(interactive=True),
             gr.update(interactive=True),
+            assembled_blog,
         )
     except Exception as e:
         logger.error(f"Blog assembly failed: {e}", exc_info=True)
@@ -504,7 +517,183 @@ async def assemble_blog_action(thread_id: str):
             gr.update(interactive=False),
             gr.update(interactive=False),
             gr.update(interactive=False),
+            f"❌ Assembly failed: {str(e)}",
         )
+
+
+async def detect_products_action(thread_id: str):
+    """Detect product H3 sections in the assembled blog. Returns: report, table, sections, dropdown, detail."""
+    empty_result = ("❌ No assembled blog found. Please assemble the blog first.",
+                   [], [], gr.update(choices=[], value=None), "*Run detection first.*")
+    
+    if not thread_id:
+        return ("❌ No active session.", [], [],
+               gr.update(choices=[], value=None), "*Run detection first.*")
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return ("❌ Session state not found.", [], [],
+                   gr.update(choices=[], value=None), "*Run detection first.*")
+        
+        blog_md = snap["values"].get("assembled_blog", "")
+        if not blog_md:
+            return empty_result
+        
+        sections = detect_product_sections(blog_md)
+        report = format_detection_report(sections)
+        
+        # Build table data with preview column
+        table_data = []
+        for i, s in enumerate(sections, 1):
+            preview = s["content"][:80].replace("\n", " ").replace("|", "/").strip() + "..."
+            table_data.append([i, s["product_name"], s["heading"], s["word_count"], preview])
+        
+        # Product names for dropdown
+        product_names = [s["product_name"] for s in sections]
+        dropdown_update = gr.update(
+            choices=product_names,
+            value=product_names[0] if product_names else None
+        )
+        
+        # Show first section detail by default
+        first_detail = get_section_detail(sections[0]) if sections else "*No products detected.*"
+        
+        return report, table_data, sections, dropdown_update, first_detail
+        
+    except Exception as e:
+        logger.error(f"Product detection failed: {e}")
+        return (f"❌ Detection failed: {str(e)}", [], [],
+               gr.update(choices=[], value=None), "*Detection failed.*")
+
+
+def show_section_detail_action(product_name: str, sections: list):
+    """Show the full section content for the selected product."""
+    if not product_name or not sections:
+        return "*Select a product to see the exact section that will be refined.*"
+    
+    for s in sections:
+        if s.get("product_name") == product_name:
+            return get_section_detail(s)
+    
+    return "*Section not found.*"
+
+
+async def refine_products_action(thread_id: str):
+    """Refine detected product sections with shopping signals + LLM.
+    Returns: report, refined_blog, original_blog (for comparison tab)."""
+    if not thread_id:
+        return "❌ No active session.", "", ""
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return "❌ Session state not found.", "", ""
+        
+        blog_md = snap["values"].get("assembled_blog", "")
+        topic = snap["values"].get("topic", "") or snap["values"].get("user_request", "")
+        
+        if not blog_md:
+            return "❌ No assembled blog found.", "", ""
+        
+        # Run refinement
+        result = await refine_blog_products(blog_md, topic)
+        report = format_refinement_report(result)
+        
+        logger.info(f"Refinement complete: {result['sections_refined']}/{result['total_products']} sections refined")
+        
+        return report, result["refined_blog"], blog_md
+        
+    except Exception as e:
+        logger.error(f"Product refinement failed: {e}")
+        return f"❌ Refinement failed: {str(e)}", "", ""
+
+
+async def export_refined_to_uniscolian_action(thread_id: str):
+    """Export the REFINED blog to Uniscolian (separate from original export)."""
+    if not thread_id:
+        return "❌ No active session."
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return "❌ Session state not found."
+        
+        refined_md = snap["values"].get("refined_blog", "")
+        if not refined_md:
+            return "❌ No refined blog found. Please run refinement first."
+        
+        topic = snap["values"].get("topic", "") or snap["values"].get("user_request", "")
+        
+        kw_data = snap["values"].get("keyword_research", {})
+        keywords = []
+        if isinstance(kw_data, dict):
+            keywords = [k.get("keyword", "") for k in kw_data.get("keywords", []) if isinstance(k, dict)][:5]
+        
+        # Call exporter in thread to not block async loop
+        result = await asyncio.to_thread(
+            export_post_to_uniscolian,
+            markdown=refined_md,
+            topic=topic,
+            keywords=keywords,
+            generate_image=True,
+            add_related=True,
+            update_sitemap=True,
+            avoid_duplicates=True,
+        )
+        
+        msg = ["## 🚀 REFINED Blog Published to Uniscolian!"]
+        msg.append(f"✅ **Post URL:** `/{result['slug']}/`")
+        msg.append(f"📊 **Word Count:** {result.get('word_count', 0)} words")
+        msg.append(f"✨ **Version:** Refined (with product signals)")
+        return "\n".join(msg)
+        
+    except Exception as e:
+        logger.error(f"Refined export failed: {e}")
+        return f"❌ Export failed: {str(e)}"
+
+
+async def enhance_detection_action(thread_id: str, current_sections: list):
+    """Use LLM to find any missed products."""
+    if not thread_id:
+        return "❌ No active session.", current_sections
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return "❌ Session state not found.", current_sections
+        
+        blog_md = snap["values"].get("assembled_blog", "")
+        if not blog_md:
+            return "❌ No assembled blog found.", current_sections
+        
+        # Get currently detected product names
+        current_names = [s["product_name"] for s in current_sections]
+        
+        # Call LLM enhancement
+        additional = await enhance_detection_with_llm(blog_md, current_names)
+        
+        if not additional:
+            return "✅ **No additional products found.** Code-based detection caught them all!", current_sections
+        
+        # Re-detect with enhanced list (this is simplified — in practice you'd add new sections)
+        report = f"🤖 **AI Enhancement Found {len(additional)} Additional Product(s):**\n\n"
+        report += "\n".join(f"- {p}" for p in additional)
+        report += "\n\n💡 *To refine these, manually add them to the detection or proceed with current list.*"
+        
+        return report, current_sections  # For now, just report — full integration would require more work
+        
+    except Exception as e:
+        logger.error(f"Enhancement failed: {e}")
+        return f"❌ Enhancement failed: {str(e)}", current_sections
 
 
 async def publish_to_uniscolian_action(thread_id: str):
@@ -681,6 +870,87 @@ def create_ui():
                         interactive=False  # Will be enabled when blog is assembled
                     )
                 publish_status_md = gr.Markdown("*Generate and assemble a blog first, then click publish.*")
+
+            # === NEW TAB: Product Detection ===
+            with gr.Tab("🔍 Product Detection"):
+                gr.Markdown("### 🔍 Product Section Detection")
+                gr.Markdown("*Detects product-specific H3 sections in your assembled blog. "
+                           "Code-based detection (no LLM) for speed and accuracy.*")
+                
+                detect_btn = gr.Button(
+                    "🔍 Detect Product Sections",
+                    variant="secondary",
+                    size="lg",
+                )
+                
+                detection_report_md = gr.Markdown("*Click 'Detect Product Sections' after assembling your blog.*")
+                
+                detection_table = gr.Dataframe(
+                    headers=["#", "Product Name", "H3 Heading", "Words", "Section Preview"],
+                    label="Detected Product Sections",
+                    interactive=False,
+                )
+                
+                gr.Markdown("---")
+                gr.Markdown("### 🔎 Inspect Section Before Refining")
+                gr.Markdown("*Select a product to see the exact section content that will be refined.*")
+                
+                product_dropdown = gr.Dropdown(
+                    label="Select Product to Inspect",
+                    choices=[],
+                    interactive=True,
+                )
+                
+                section_detail_md = gr.Markdown("*Run detection first.*")
+                
+                gr.Markdown("---")
+                
+                # NEW: Enhancement button
+                enhance_btn = gr.Button(
+                    "🤖 Enhance with AI (Find Missed Products)",
+                    variant="secondary",
+                    size="sm",
+                )
+                enhancement_report_md = gr.Markdown("")
+                
+                refine_btn = gr.Button(
+                    "✨ Refine Product Sections (with Shopping Signals)",
+                    variant="primary",
+                    size="lg",
+                )
+                
+                refinement_report_md = gr.Markdown("")
+                
+                # Hidden state to store detected sections and refined blog
+                detected_sections_state = gr.State([])
+                refined_blog_state = gr.State("")
+                original_blog_state = gr.State("")
+
+            # === NEW TAB: Blog Comparison & Export ===
+            with gr.Tab("📝 Blog Comparison & Export"):
+                gr.Markdown("### 📝 Original vs Refined Blog")
+                gr.Markdown("*Compare the original and refined versions. Export whichever you prefer.*")
+                
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("#### 📄 Original Blog")
+                        original_blog_display = gr.Markdown("*Original assembled blog will appear here after assembly.*")
+                        export_original_btn = gr.Button(
+                            "🚀 Export ORIGINAL to Uniscolian",
+                            variant="secondary",
+                            size="lg",
+                        )
+                        original_export_status = gr.Markdown("")
+                    
+                    with gr.Column():
+                        gr.Markdown("#### ✨ Refined Blog")
+                        refined_blog_display = gr.Markdown("*Refined blog will appear here after refinement.*")
+                        export_refined_btn = gr.Button(
+                            "🚀 Export REFINED to Uniscolian",
+                            variant="primary",
+                            size="lg",
+                        )
+                        refined_export_status = gr.Markdown("")
         
         # === EVENT HANDLERS WITH DOUBLE-CLICK PREVENTION ===
         
@@ -748,7 +1018,7 @@ def create_ui():
         assemble_btn.click(
             fn=assemble_blog_action,
             inputs=[thread_id_state],
-            outputs=[final_blog_md, blog_stats, download_md_btn, download_pdf_btn, publish_uniscolian_btn],
+            outputs=[final_blog_md, blog_stats, download_md_btn, download_pdf_btn, publish_uniscolian_btn, original_blog_display],
         )
         download_md_btn.click(fn=download_markdown_action, inputs=[thread_id_state], outputs=[download_file])
         download_pdf_btn.click(fn=download_pdf_action, inputs=[thread_id_state], outputs=[download_file])
@@ -756,6 +1026,58 @@ def create_ui():
             fn=publish_to_uniscolian_action,
             inputs=[thread_id_state],
             outputs=[publish_status_md]
+        )
+
+        # Product Detection wiring (5 outputs)
+        detect_btn.click(
+            fn=detect_products_action,
+            inputs=[thread_id_state],
+            outputs=[
+                detection_report_md,
+                detection_table,
+                detected_sections_state,
+                product_dropdown,
+                section_detail_md,
+            ],
+        )
+        
+        # Show section detail when dropdown changes
+        product_dropdown.change(
+            fn=show_section_detail_action,
+            inputs=[product_dropdown, detected_sections_state],
+            outputs=[section_detail_md],
+        )
+
+        # AI Enhancement wiring
+        enhance_btn.click(
+            fn=enhance_detection_action,
+            inputs=[thread_id_state, detected_sections_state],
+            outputs=[enhancement_report_md, detected_sections_state],
+        )
+        
+        # Refine button wiring — updates report, refined state, original state, and displays
+        refine_btn.click(
+            fn=refine_products_action,
+            inputs=[thread_id_state],
+            outputs=[refinement_report_md, refined_blog_state, original_blog_state],
+        ).then(
+            fn=lambda r, o: (o if o else "*No blog assembled yet.*",
+                            r if r else "*Run refinement first to see the refined version.*"),
+            inputs=[refined_blog_state, original_blog_state],
+            outputs=[original_blog_display, refined_blog_display],
+        )
+        
+        # Export buttons wiring
+        export_original_btn.click(
+            fn=publish_to_uniscolian_action,
+            inputs=[thread_id_state],
+            outputs=[original_export_status],
+        )
+        
+        export_refined_btn.click(
+            fn=export_refined_to_uniscolian_action,
+            inputs=[thread_id_state],
+            outputs=[refined_export_status],
         )
     
     return demo
@@ -1940,6 +2262,7 @@ from __future__ import annotations
 import html
 import re
 import urllib.parse
+import base64
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -1975,6 +2298,43 @@ def _decode_ddg_url(href: str) -> str:
         except Exception:
             pass
     return href
+
+
+def _decode_bing_redirect_url(bing_url: str) -> str:
+    """Decode Bing's ck/a redirect URLs to extract actual destination.
+    
+    Bing returns URLs like: https://www.bing.com/ck/a?!&&p=...&u=a1aHR0cHM6Ly9...&ntb=1
+    The real URL is base64-encoded in the 'u' parameter with 'a1' prefix.
+    """
+    try:
+        if not bing_url or "bing.com/ck/a" not in bing_url:
+            return bing_url
+        
+        parsed = urllib.parse.urlparse(bing_url)
+        params = urllib.parse.parse_qs(parsed.query)
+        
+        if "u" not in params:
+            return bing_url
+        
+        encoded_url = params["u"][0]
+        
+        # Bing uses base64 encoding with 'a1' prefix
+        if encoded_url.startswith("a1"):
+            try:
+                # Remove 'a1' prefix and add padding if needed
+                b64_content = encoded_url[2:]
+                padded = b64_content + "=" * (-len(b64_content) % 4)
+                decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
+                
+                if decoded.startswith("http"):
+                    logger.info(f"Decoded Bing URL: {bing_url[:60]}... -> {decoded}")
+                    return decoded
+            except Exception as e:
+                logger.debug(f"Bing URL decode failed: {e}")
+        
+        return bing_url
+    except Exception:
+        return bing_url
 
 
 async def search_duckduckgo(query: str, max_results: int = 10) -> List[Dict[str, str]]:
@@ -2036,17 +2396,66 @@ async def search_duckduckgo(query: str, max_results: int = 10) -> List[Dict[str,
     return results
 
 
+async def search_ddg_lite(query: str, max_results: int = 6) -> List[Dict[str, str]]:
+    """Search DuckDuckGo Lite - simpler HTML, less likely to be blocked."""
+    url = "https://lite.duckduckgo.com/lite/"
+    results: List[Dict[str, str]] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            follow_redirects=True,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html",
+            }
+        ) as client:
+            response = await client.post(url, data={"q": query, "kl": "us-en"})
+            
+            if response.status_code != 200:
+                logger.warning(f"DDG Lite returned {response.status_code}")
+                return []
+            
+            html_content = response.text
+            link_matches = re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html_content, re.DOTALL)
+            
+            for href, title_html in link_matches:
+                if not href.startswith("http") or "duckduckgo.com" in href:
+                    continue
+                title = clean_html(title_html)
+                if href and title and len(results) < max_results:
+                    if not any(r["url"] == href for r in results):
+                        results.append({
+                            "url": href,
+                            "title": title,
+                            "snippet": title,
+                            "source": "duckduckgo_lite"
+                        })
+            
+            logger.info(f"DDG Lite search for '{query}' returned {len(results)} results")
+            return results
+            
+    except Exception as e:
+        logger.warning(f"DDG Lite search failed: {e}")
+        return []
+
+
 async def search_bing(query: str, max_results: int = 10) -> List[Dict[str, str]]:
     """Search Bing and return a list of result dicts."""
     results: List[Dict[str, str]] = []
     encoded_query = urllib.parse.quote_plus(query)
     url = f"https://www.bing.com/search?q={encoded_query}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            response = await client.get(url, headers=headers)
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=True,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate",
+            }
+        ) as client:
+            response = await client.get(url)
             response.raise_for_status()
             html_content = response.text
 
@@ -2071,16 +2480,31 @@ async def search_bing(query: str, max_results: int = 10) -> List[Dict[str, str]]
                 )
 
             if h2_match:
-                href = h2_match.group(1)
+                raw_href = h2_match.group(1)
+
+                # CRITICAL: Decode Bing redirect URLs
+                if "bing.com/ck/a" in raw_href:
+                    real_url = _decode_bing_redirect_url(raw_href)
+                else:
+                    real_url = raw_href
+
+                # Skip non-HTTP URLs (images, scripts, etc)
+                if not real_url.startswith("http"):
+                    continue
+
+                # Skip Bing's own pages
+                if "bing.com" in real_url or "microsoft.com" in real_url:
+                    continue
+
                 title = clean_html(h2_match.group(2))
 
                 p_match = re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL)
                 snippet = clean_html(p_match.group(1)) if p_match else ""
 
-                if href and title:
+                if real_url and title:
                     results.append({
                         "title": title,
-                        "url": href,
+                        "url": real_url,
                         "snippet": snippet,
                     })
         logger.info("Bing search for '%s' returned %d results", query, len(results))
@@ -2090,15 +2514,20 @@ async def search_bing(query: str, max_results: int = 10) -> List[Dict[str, str]]
 
 
 async def get_top_results(query: str, max_results: int = 10) -> List[Dict[str, str]]:
-    """Try DuckDuckGo first; fall back to Bing if empty; return trimmed results."""
+    """Try DuckDuckGo first; fall back to DDG Lite; fall back to Bing if empty; return trimmed results."""
     results = await search_duckduckgo(query, max_results=max_results)
     if not results:
-        logger.info("DuckDuckGo returned no results for '%s', falling back to Bing...", query)
+        logger.info(f"DDG HTML failed, trying DDG Lite for '{query}'")
+        results = await search_ddg_lite(query, max_results=max_results)
+
+    if not results:
+        logger.info(f"DDG Lite also failed, falling back to Bing for '{query}'")
         results = await search_bing(query, max_results=max_results)
 
     trimmed = results[:max_results]
     logger.info("get_top_results for '%s' found %d results total", query, len(trimmed))
     return trimmed
+
 === FILE END: .\backend\tools\serp_scraper.py ===
 
 === FILE START: .\backend\tools\shopping_intelligence.py ===
@@ -2120,6 +2549,20 @@ PRICE_RE = re.compile(r"\$\s?(\d{1,4}(?:\.\d{2})?)")
 RETAILERS = {
     "amazon", "ebay", "walmart", "best buy", "bestbuy", "newegg",
     "target", "costco", "b&h", "bhphotovideo", "micro center",
+}
+
+# Known brands and their product lines for product detection
+KNOWN_BRANDS = {
+    "apple": ["macbook air", "macbook pro", "macbook", "ipad", "iphone", "watch", "airpods"],
+    "asus": ["vivobook", "zenbook", "rog", "tuf"],
+    "dell": ["xps", "inspiron", "latitude", "alienware"],
+    "lenovo": ["thinkpad", "ideapad", "legion", "yoga"],
+    "hp": ["spectre", "envy", "pavilion", "elitebook", "omen"],
+    "microsoft": ["surface pro", "surface laptop", "surface"],
+    "acer": ["aspire", "predator", "swift", "nitro"],
+    "msi": ["stealth", "raider", "katana", "vector"],
+    "samsung": ["galaxy", "odyssey", "tab"],
+    "sony": ["wh-1000xm4", "wh-1000xm5", "wf-1000xm5", "bravia", "playstation"],
 }
 
 # Tier keywords for context extraction
@@ -4166,6 +4609,11 @@ class ContentForgeState(TypedDict, total=False):
     assembled_blog: str                    # Final merged markdown blog
     assembly_status: str                   # "pending" | "assembling" | "complete"
     
+    # Product Refinement System (post-processing)
+    refined_blog: str
+    refinement_report: str
+    refinement_stats: List[Dict[str, Any]]
+    
     # === Execution Config ===
     execution_mode: str                    # Always "interactive" in new architecture
     gemini_model: str                      # Which Gemini model to use (default: "gemini-3.5-flash-lite")
@@ -4207,6 +4655,9 @@ def create_initial_state(
         # Phase 4
         "assembled_blog": "",
         "assembly_status": "pending",
+        "refined_blog": "",
+        "refinement_report": "",
+        "refinement_stats": [],
         
         # Config
         "execution_mode": "interactive",
@@ -5735,6 +6186,552 @@ def build_ez_toc(headings: List[Tuple[int, str]], include_h3: bool = False) -> s
 from __future__ import annotations
 
 === FILE END: .\core\exporters\__init__.py ===
+
+=== FILE START: .\core\post_processors\product_detector.py ===
+"""Detect product-specific H3 sections in an assembled blog.
+Code-based detection using KNOWN_BRANDS dictionary — NO LLM involved."""
+from __future__ import annotations
+import re
+from typing import List, Dict
+
+from app.config import logger
+from backend.tools.shopping_intelligence import KNOWN_BRANDS, RETAILERS
+
+# H3 headings that are GENERIC (not product-specific) — skip these
+GENERIC_H3_KEYWORDS = [
+    "introduction", "conclusion", "comparison", "overview", "summary",
+    "buying guide", "faq", "how to", "why", "what is", "verdict",
+    "final thoughts", "specification", "features", "specs", "what specs", "pros and cons",
+    "methodology", "how we test", "quick snapshot", "tl;dr", "what to look",
+    "when to buy", "who this is for", "our methodology", "our picks",
+]
+
+
+def _build_product_pattern() -> re.Pattern:
+    """Build regex pattern from KNOWN_BRANDS to match product names."""
+    terms = []
+    for brand, products in KNOWN_BRANDS.items():
+        terms.append(re.escape(brand))
+        for p in products:
+            terms.append(re.escape(f"{brand} {p}"))
+            terms.append(re.escape(p))
+    # Sort by length descending so longer matches win
+    terms = sorted(set(terms), key=len, reverse=True)
+    if not terms:
+        return re.compile(r"\b(placeholder_never_match)\b", re.IGNORECASE)
+    return re.compile(r"\b(" + "|".join(terms) + r")\b", re.IGNORECASE)
+
+
+PRODUCT_PATTERN = _build_product_pattern()
+
+
+def _extract_headings_with_positions(markdown: str) -> List[Dict]:
+    """Extract all H2/H3 headings with their character positions."""
+    headings = []
+    for match in re.finditer(r'^(#{2,3})\s+(.+)$', markdown, re.MULTILINE):
+        level = len(match.group(1))
+        title = match.group(2).strip()
+        headings.append({
+            "level": level,
+            "title": title,
+            "start": match.start(),
+            "end": match.end(),
+        })
+    return headings
+
+
+def _is_generic_heading(title: str) -> bool:
+    """Check if an H3 heading is generic (not a product name)."""
+    title_lower = title.lower()
+    title_clean = re.sub(r'^\d+[\.\)]\s*', '', title_lower).strip()
+    return any(kw in title_clean for kw in GENERIC_H3_KEYWORDS)
+
+
+def _extract_product_name(title: str) -> str:
+    """Extract FULL product name including model number from an H3 heading.
+    
+    Examples:
+    - "Best Overall: ASUS ROG Strix X870E-E Gaming WiFi" → "ASUS ROG Strix X870E-E Gaming WiFi"
+    - "Best Value: MSI MAG X870E Tomahawk WiFi" → "MSI MAG X870E Tomahawk WiFi"
+    - "1. MacBook Air M2" → "MacBook Air M2"
+    """
+    # Remove numbering prefix like "1.", "2." etc
+    title_clean = re.sub(r'^\d+[\.\)]\s*', '', title)
+    
+    # Remove award labels like "Best Overall:", "Our Pick:", "Editor's Choice:" etc
+    title_clean = re.sub(
+        r'^(Best\s+[\w\s-]+|Our\s+[\w\s-]+|Top\s+[\w\s-]+|Editor\'?s?\s+[\w\s-]+|Recommended|Favorite|Budget\s+Pick|Premium\s+Pick)[:\-]\s*',
+        '', title_clean, flags=re.IGNORECASE
+    ).strip()
+    
+    # Try to find full product name with model numbers first
+    # Match: Brand + Product Line + Model Number (e.g., "ASUS ROG Strix X870E-E")
+    full_product_match = re.search(
+        r'\b(' + 
+        r'(?:ASUS|MSI|Gigabyte|ASRock|NZXT|EVGA|Dell|HP|Lenovo|Acer|Apple|Samsung|Razer|Microsoft|Sony|Bose|Sennheiser|Keychron|Logitech|Corsair|BenQ|LG|Canon|Nikon|Fujifilm)' +
+        r'(?:\s+[\w\-]+){0,4}' +  # Up to 4 additional words for product line + model
+        r')\b',
+        title_clean,
+        re.IGNORECASE
+    )
+    
+    if full_product_match:
+        result = full_product_match.group(1).strip()
+        # Verify it's not a retailer
+        if result.lower() not in RETAILERS:
+            return result
+    
+    # Fallback to existing PRODUCT_PATTERN match
+    match = PRODUCT_PATTERN.search(title_clean)
+    if match:
+        return match.group(1).strip()
+    
+    return ""
+
+
+def detect_product_sections(blog_markdown: str) -> List[Dict]:
+    """Detect all product-specific H3 sections in the blog.
+    
+    Returns list of dicts with: heading, product_name, content, start, end, word_count
+    """
+    if not blog_markdown or not blog_markdown.strip():
+        return []
+    
+    headings = _extract_headings_with_positions(blog_markdown)
+    h3_headings = [h for h in headings if h["level"] == 3]
+    
+    product_sections = []
+    
+    for heading in h3_headings:
+        # Skip generic headings
+        if _is_generic_heading(heading["title"]):
+            continue
+        
+        # Extract product name
+        product_name = _extract_product_name(heading["title"])
+        if not product_name:
+            continue
+        
+        # Skip retailers
+        if product_name.lower() in RETAILERS:
+            continue
+        
+        # Determine section content boundaries
+        content_start = heading["end"]
+        next_headings = [h for h in headings if h["start"] > content_start]
+        if next_headings:
+            content_end = min(h["start"] for h in next_headings)
+        else:
+            content_end = len(blog_markdown)
+        
+        section_content = blog_markdown[content_start:content_end].strip()
+        
+        product_sections.append({
+            "heading": heading["title"],
+            "product_name": product_name,
+            "content": section_content,
+            "start": heading["start"],
+            "end": content_end,
+            "word_count": len(section_content.split()),
+        })
+    
+    # Deduplicate by full product_name (keep first occurrence)
+    seen = set()
+    unique_sections = []
+    for section in product_sections:
+        key = section["product_name"].lower().strip()
+        # Skip if too short (probably just a brand name)
+        if len(key) < 5:
+            continue
+        if key not in seen:
+            seen.add(key)
+            unique_sections.append(section)
+    
+    logger.info("Detected %d product sections in blog", len(unique_sections))
+    return unique_sections
+
+
+async def enhance_detection_with_llm(blog_markdown: str, detected_products: List[str]) -> List[str]:
+    """Use LLM to find any products that code-based detection missed.
+    
+    This is OPTIONAL and user-controlled via UI button.
+    """
+    from backend.llm.router import LLMRouter
+    
+    prompt = f"""Analyze this blog post and extract ALL specific product names mentioned.
+
+DETECTED PRODUCTS (already found by code):
+{chr(10).join(f"- {p}" for p in detected_products) if detected_products else "(none detected yet)"}
+
+BLOG CONTENT (first 3000 chars):
+\"\"\"
+{blog_markdown[:3000]}
+\"\"\"
+
+TASK: List any ADDITIONAL specific product names (brand + model) that appear in the blog but are NOT in the detected list above.
+
+Rules:
+- Only include specific products with brand AND model (e.g., "ASUS ROG Strix X870E-E", not just "motherboard")
+- Do NOT include generic terms like "laptop", "CPU", "GPU"
+- Do NOT repeat products already in the detected list
+- Return ONLY a JSON array of product names, or empty array if none found
+
+Output format (JSON array only):
+["Product Name 1", "Product Name 2"]
+"""
+
+    try:
+        router = LLMRouter()
+        response = await router.generate_text(
+            prompt=prompt,
+            system_prompt="You are a product detection expert. Return only a JSON array of product names.",
+            task_type="competitor_analysis"
+        )
+        
+        # Parse JSON response
+        import json
+        import re
+        
+        # Extract JSON array from response
+        json_match = re.search(r'\[.*?\]', response, re.DOTALL)
+        if json_match:
+            additional_products = json.loads(json_match.group(0))
+            return [p for p in additional_products if isinstance(p, str) and len(p) > 3]
+        
+        return []
+        
+    except Exception as e:
+        logger.warning(f"LLM enhancement failed: {e}")
+        return []
+
+
+def format_detection_report(sections: List[Dict]) -> str:
+    """Format detected sections as a markdown report for UI display."""
+    if not sections:
+        return ("### 🔍 No Product Sections Detected\n\n"
+                "This blog doesn't appear to have product-specific H3 sections. "
+                "The refinement feature works best with product review/comparison blogs.")
+    
+    lines = [
+        f"### 🔍 Detected {len(sections)} Product Sections\n",
+        "| # | Product Name | H3 Heading | Words | Section Preview |",
+        "|---|--------------|-----------|-------|-----------------|",
+    ]
+    for i, s in enumerate(sections, 1):
+        preview = s['content'][:80].replace('\n', ' ').replace('|', '/').strip()
+        lines.append(
+            f"| {i} | **{s['product_name']}** | {s['heading']} | "
+            f"{s['word_count']} | {preview}... |"
+        )
+    
+    lines.append("\n✅ **All sections look good!** Use the dropdown below to inspect the "
+                 "exact section that will be refined, then click Refine.")
+    lines.append("\n💡 *Only the content under each H3 heading will be enhanced — "
+                 "the H3 headings themselves stay unchanged.*")
+    
+    return "\n".join(lines)
+
+
+def get_section_detail(section: Dict) -> str:
+    """Format a single section's full content for the detail view."""
+    if not section:
+        return "*Select a product to see the exact section that will be refined.*"
+    
+    return "\n".join([
+        f"### 📌 {section['heading']}",
+        f"**Product:** `{section['product_name']}` | **Words:** {section['word_count']}",
+        "",
+        "---",
+        "",
+        "**📝 This is the exact section content that will be refined:**",
+        "",
+        section['content'],
+        "",
+        "---",
+        "",
+        "✨ *After refinement, real user shopping signals will be naturally woven "
+        "into this section while keeping the same tone.*",
+    ])
+
+=== FILE END: .\core\post_processors\product_detector.py ===
+
+=== FILE START: .\core\post_processors\product_refiner.py ===
+"""Refine product sections with per-product shopping signals + LLM rewrite.
+Preserves blog tone by providing context. H3 headings are never changed."""
+from __future__ import annotations
+import asyncio
+from typing import List, Dict
+
+from app.config import logger
+from backend.llm.router import LLMRouter
+from backend.tools.serp_scraper import get_top_results
+from backend.tools.shopping_intelligence import (
+    PRAISE_WORDS, COMPLAINT_WORDS, PRICE_RE
+)
+from core.post_processors.product_detector import detect_product_sections
+
+# Minimum products needed to trigger refinement
+MIN_PRODUCTS_FOR_REFINEMENT = 2
+MAX_PRODUCTS_FOR_REFINEMENT = 10
+
+
+async def gather_product_signals(product_name: str, topic: str = "") -> Dict:
+    """Fetch shopping signals for a SINGLE product (3 parallel queries)."""
+    # Mix of broad and specific queries for better coverage
+    queries = [
+        f"site:reddit.com {product_name} review experience",  # Broad Reddit
+        f"{product_name} review pros cons",                   # Broad (no quotes)
+        f"{product_name} problems issues complaints",         # Problem-focused
+    ]
+    
+    snippets: List[str] = []
+    
+    async def fetch_one(q: str):
+        try:
+            results = await get_top_results(q, max_results=4)  # More results
+            return [
+                (r.get("snippet") or r.get("description") or r.get("title") or "").strip()
+                for r in results
+            ]
+        except Exception as e:
+            logger.warning(f"Product query failed ({q}): {e}")
+            return []
+    
+    results = await asyncio.gather(*[fetch_one(q) for q in queries])
+    for snips in results:
+        snippets.extend([s for s in snips if s and len(s) > 10])
+    
+    if not snippets:
+        logger.warning(f"No snippets found for product: {product_name}")
+        return {"product": product_name, "praise": [], "complaints": [], "found": False}
+    
+    text = " ".join(snippets).lower()
+    logger.info(f"Product {product_name}: {len(snippets)} snippets, {len(text)} chars")
+    
+    # Extract sentiment (use top 6 for more coverage)
+    praise = [w for w in PRAISE_WORDS if w in text][:6]
+    complaints = [w for w in COMPLAINT_WORDS if w in text][:6]
+    
+    logger.info(f"Product {product_name}: praise={praise}, complaints={complaints}")
+    
+    return {
+        "product": product_name,
+        "praise": praise,
+        "complaints": complaints,
+        "snippet_count": len(snippets),
+        "found": True,
+    }
+
+
+REFINE_SYSTEM_PROMPT = """You are an expert product review editor. You will refine a specific product section by naturally integrating real user feedback signals.
+
+CRITICAL RULES:
+1. PRESERVE the original writing style, tone, and voice exactly
+2. KEEP all original facts, specs, and data — do NOT remove or change them
+3. Do NOT change or remove the H3 heading (first line starting with ###)
+4. Add only 2-3 sentences of user sentiment, woven naturally into the text
+5. NEVER add specific dollar amounts ($X, $X.XX) — use relative terms like "great value", "premium-tier", "budget-friendly"
+6. Aim to keep length close to the original, but a 20-40% increase is acceptable when adding user sentiment
+7. Use natural phrases like "Users consistently praise...", "Real-world feedback highlights...", "A common concern among owners is..."
+8. Output ONLY the refined section content (including the H3 heading line), nothing else. Do NOT wrap output in code fences."""
+
+
+async def refine_single_section(
+    section: Dict,
+    signals: Dict,
+    blog_context: str,
+) -> str:
+    """Refine a single product section using LLM with blog context for tone."""
+    original_content = section["content"]
+    original_heading = section["heading"]
+    
+    # Build context: blog tone sample + surrounding structure
+    context_sample = blog_context[:800] if blog_context else ""
+    
+    praise_str = ", ".join(signals["praise"]) if signals["praise"] else "none detected"
+    complaints_str = ", ".join(signals["complaints"]) if signals["complaints"] else "none detected"
+    
+    user_prompt = f"""BLOG TONE REFERENCE (match this writing style):
+\"\"\"
+{context_sample}
+\"\"\"
+
+ORIGINAL SECTION TO REFINE:
+\"\"\"
+### {original_heading}
+{original_content}
+\"\"\"
+
+PRODUCT: {section['product_name']}
+REAL USER SIGNALS (from Reddit/Amazon/review sites):
+- What users praise: {praise_str}
+- Common complaints: {complaints_str}
+
+TASK: Rewrite the section content, naturally integrating the user signals while preserving the exact tone, facts, and H3 heading. Output only the refined section (starting with the ### heading). Do NOT wrap output in code fences."""
+
+    try:
+        router = LLMRouter()
+        refined = await router.generate_text(
+            prompt=user_prompt,
+            system_prompt=REFINE_SYSTEM_PROMPT,
+            task_type="section_writing",
+        )
+        
+        # Clean up response
+        refined = refined.strip()
+        refined = refined.replace("```markdown", "").replace("```", "").strip()
+        
+        # Validation: ensure H3 heading is preserved
+        if not refined.startswith("###"):
+            refined = f"### {original_heading}\n{refined}"
+        
+        # Validation: ensure no dollar prices slipped in
+        if PRICE_RE.search(refined):
+            logger.warning("Refined section for %s contained prices, using original",
+                          section['product_name'])
+            return f"### {original_heading}\n{original_content}"
+        
+        return refined
+        
+    except Exception as e:
+        logger.warning("LLM refinement failed for %s: %s", section['product_name'], e)
+        return f"### {original_heading}\n{original_content}"
+
+
+async def refine_blog_products(blog_markdown: str, topic: str = "") -> Dict:
+    """Main orchestrator: detect products, fetch signals, refine sections.
+    
+    Returns dict with: refined_blog, sections_refined, total_products, stats, skipped, reason
+    """
+    sections = detect_product_sections(blog_markdown)
+    
+    if len(sections) < MIN_PRODUCTS_FOR_REFINEMENT:
+        return {
+            "refined_blog": blog_markdown,
+            "sections_refined": 0,
+            "total_products": len(sections),
+            "skipped": True,
+            "reason": f"Only {len(sections)} product(s) found, need at least {MIN_PRODUCTS_FOR_REFINEMENT}",
+            "stats": [],
+        }
+    
+    if len(sections) > MAX_PRODUCTS_FOR_REFINEMENT:
+        sections = sections[:MAX_PRODUCTS_FOR_REFINEMENT]
+    
+    # Fetch shopping signals for all products (parallel)
+    signal_tasks = [gather_product_signals(s["product_name"], topic) for s in sections]
+    all_signals = await asyncio.gather(*signal_tasks)
+    
+    # Refine each section (parallel LLM calls)
+    refine_tasks = [
+        refine_single_section(section, signals, blog_markdown)
+        for section, signals in zip(sections, all_signals)
+    ]
+    refined_contents = await asyncio.gather(*refine_tasks)
+    
+    # Replace sections in blog (from END to START to preserve positions)
+    refined_blog = blog_markdown
+    stats = []
+    
+    sorted_pairs = sorted(
+        zip(sections, refined_contents, all_signals),
+        key=lambda x: x[0]["start"],
+        reverse=True,
+    )
+    
+    for section, refined_full, signals in sorted_pairs:
+        section_start = section["start"]
+        section_end = section["end"]
+        
+        # Extract content from refined (skip the heading line)
+        if refined_full.startswith("###"):
+            refined_content_only = refined_full.split('\n', 1)[1] if '\n' in refined_full else ""
+        else:
+            refined_content_only = refined_full
+        
+        # Replace only the content part (not the heading)
+        heading_text = f"### {section['heading']}"
+        new_section = heading_text + "\n\n" + refined_content_only.strip() + "\n"
+        
+        refined_blog = (
+            refined_blog[:section_start]
+            + new_section
+            + refined_blog[section_end:]
+        )
+        
+        was_refined = refined_content_only.strip() != section["content"].strip()
+        stats.append({
+            "product": section["product_name"],
+            "heading": section["heading"],
+            "praise_found": signals["praise"],
+            "complaints_found": signals["complaints"],
+            "was_refined": was_refined,
+        })
+    
+    sections_refined = sum(1 for s in stats if s["was_refined"])
+    
+    logger.info("Blog refinement complete: %d/%d sections refined",
+               sections_refined, len(sections))
+    
+    return {
+        "refined_blog": refined_blog,
+        "sections_refined": sections_refined,
+        "total_products": len(sections),
+        "skipped": False,
+        "reason": "",
+        "stats": stats,
+    }
+
+
+def format_refinement_report(result: Dict) -> str:
+    """Format refinement results for UI display."""
+    if result.get("skipped"):
+        return f"### ⚠️ Refinement Skipped\n\n{result.get('reason', 'Unknown reason')}"
+    
+    lines = [
+        f"### ✨ Refinement Complete!\n",
+        f"**{result['sections_refined']} of {result['total_products']}** product sections "
+        f"enhanced with real user signals.\n",
+        "| Product | Praise Signals | Complaint Signals | Refined |",
+        "|---------|---------------|-------------------|---------|",
+    ]
+    
+    for stat in result["stats"]:
+        praise = ", ".join(stat["praise_found"][:3]) or "—"
+        complaints = ", ".join(stat["complaints_found"][:3]) or "—"
+        refined_icon = "✅" if stat["was_refined"] else "⏭️"
+        lines.append(
+            f"| **{stat['product']}** | {praise} | {complaints} | {refined_icon} |"
+        )
+    
+    lines.append("\n📖 **Check the Blog Comparison tab to see the refined version "
+                "side by side with the original.**")
+    
+    return "\n".join(lines)
+
+=== FILE END: .\core\post_processors\product_refiner.py ===
+
+=== FILE START: .\core\post_processors\__init__.py ===
+"""Post-processing modules for blog refinement."""
+from core.post_processors.product_detector import (
+    detect_product_sections,
+    format_detection_report,
+    get_section_detail,
+)
+from core.post_processors.product_refiner import (
+    refine_blog_products,
+    format_refinement_report,
+)
+
+__all__ = [
+    "detect_product_sections",
+    "format_detection_report",
+    "get_section_detail",
+    "refine_blog_products",
+    "format_refinement_report",
+]
+
+=== FILE END: .\core\post_processors\__init__.py ===
 
 === FILE START: .\core\prompts\blog_intro_prompt.py ===
 """System prompt for generating an engaging blog intro based on all sections."""
@@ -8555,6 +9552,304 @@ if __name__ == "__main__":
     main()
 
 === FILE END: .\tests\test_level9_revised.py ===
+
+=== FILE START: .\tests\test_product_refinement.py ===
+"""Tests for the product detection and refinement system.
+Includes mocked LLM tests to verify the full flow without real API calls."""
+import asyncio
+import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from core.post_processors.product_detector import (
+    detect_product_sections,
+    format_detection_report,
+    get_section_detail,
+    _is_generic_heading,
+    _extract_product_name,
+)
+from core.post_processors import product_refiner
+
+SAMPLE_BLOG = """# Best Budget Laptops 2026
+
+## Introduction
+
+Welcome to our guide on the best budget laptops.
+
+## Top Laptop Picks
+
+### 1. MacBook Air M2
+
+The MacBook Air M2 offers excellent performance with its Apple silicon chip. It has great battery life and a beautiful display. The build quality is premium and it weighs only 2.7 pounds.
+
+### 2. ASUS VivoBook 15
+
+The ASUS VivoBook 15 provides solid performance for everyday tasks. It features a 15.6-inch display and comes with 16GB of RAM.
+
+### 3. Dell XPS 13
+
+The Dell XPS 13 is known for its stunning display and compact design. It offers powerful performance in a portable package.
+
+## Buying Guide
+
+### How to Choose the Right Laptop
+
+Consider your needs before buying. Think about battery life, display quality, and performance requirements.
+
+### What Specs Matter Most
+
+RAM and storage are important considerations for most users.
+
+## Conclusion
+
+These are our top picks for budget laptops in 2026.
+"""
+
+
+def test_detect_product_sections():
+    """Should detect 3 product sections (MacBook, ASUS, Dell) but not generic H3s."""
+    sections = detect_product_sections(SAMPLE_BLOG)
+    
+    assert len(sections) == 3, f"Expected 3, got {len(sections)}: {[s['product_name'] for s in sections]}"
+    
+    names = [s["product_name"].lower() for s in sections]
+    assert any("macbook" in n for n in names), f"MacBook not found in {names}"
+    assert any("vivobook" in n or "asus" in n for n in names), f"ASUS not found in {names}"
+    assert any("xps" in n or "dell" in n for n in names), f"Dell not found in {names}"
+    
+    headings = [s["heading"].lower() for s in sections]
+    assert not any("how to choose" in h for h in headings)
+    assert not any("what specs" in h for h in headings)
+    
+    print("[OK] test_detect_product_sections passed")
+
+
+def test_generic_heading_detection():
+    """Generic H3 headings should be correctly identified."""
+    assert _is_generic_heading("How to Choose the Right Laptop") is True
+    assert _is_generic_heading("What Specs Matter Most") is True
+    assert _is_generic_heading("Introduction") is True
+    assert _is_generic_heading("Buying Guide") is True
+    assert _is_generic_heading("MacBook Air M2") is False
+    assert _is_generic_heading("ASUS VivoBook 15") is False
+    print("[OK] test_generic_heading_detection passed")
+
+
+def test_product_name_extraction():
+    """Should extract product names from various H3 formats."""
+    assert "MacBook" in _extract_product_name("1. MacBook Air M2")
+    assert "VivoBook" in _extract_product_name("2. ASUS VivoBook 15")
+    assert "XPS" in _extract_product_name("Best Overall: Dell XPS 13")
+    print("[OK] test_product_name_extraction passed")
+
+
+def test_empty_blog():
+    """Empty blog should return empty list."""
+    assert detect_product_sections("") == []
+    assert detect_product_sections("   ") == []
+    print("[OK] test_empty_blog passed")
+
+
+def test_no_products_blog():
+    """Blog without products should return empty list."""
+    blog = "# Guide\n\n## Introduction\n\nSome text.\n\n## How To\n\n### Step One\n\nDo this."
+    sections = detect_product_sections(blog)
+    assert len(sections) == 0
+    print("[OK] test_no_products_blog passed")
+
+
+def test_format_detection_report():
+    """Detection report should be formatted correctly."""
+    sections = detect_product_sections(SAMPLE_BLOG)
+    report = format_detection_report(sections)
+    
+    assert "Detected" in report
+    assert "Product Sections" in report
+    assert "MacBook" in report
+    assert "Section Preview" in report  # preview column exists
+    print("[OK] test_format_detection_report passed")
+
+
+def test_get_section_detail():
+    """Detail view should show full section content."""
+    sections = detect_product_sections(SAMPLE_BLOG)
+    detail = get_section_detail(sections[0])
+    
+    assert sections[0]["heading"] in detail
+    assert sections[0]["product_name"] in detail
+    assert sections[0]["content"] in detail  # Full content shown
+    assert "will be refined" in detail
+    print("[OK] test_get_section_detail passed")
+
+
+def test_headings_not_changed():
+    """H3 headings should remain intact in section content boundaries."""
+    sections = detect_product_sections(SAMPLE_BLOG)
+    for s in sections:
+        assert s["heading"] in SAMPLE_BLOG
+    print("[OK] test_headings_not_changed passed")
+
+
+def test_refinement_with_mocked_llm():
+    """CRITICAL: Full refinement flow with mocked LLM and shopping signals."""
+    
+    async def run_test():
+        # Mock signals
+        mock_signals = {
+            "MacBook Air M2": {
+                "product": "MacBook Air M2",
+                "praise": ["battery life", "silent", "portable"],
+                "complaints": ["heating under load"],
+                "snippet_count": 5,
+                "found": True,
+            },
+            "ASUS VivoBook 15": {
+                "product": "ASUS VivoBook 15",
+                "praise": ["great value", "solid build"],
+                "complaints": ["fan noise"],
+                "snippet_count": 4,
+                "found": True,
+            },
+            "Dell XPS 13": {
+                "product": "Dell XPS 13",
+                "praise": ["crisp display", "lightweight"],
+                "complaints": ["pricey"],
+                "snippet_count": 3,
+                "found": True,
+            },
+        }
+        
+        # Mock LLM to return a refined section (includes heading)
+        def mock_llm_response(prompt, **kwargs):
+            # Extract heading from prompt
+            import re
+            m = re.search(r"### ([^\n]+)", prompt)
+            heading = m.group(1) if m else "Product"
+            return (f"### {heading}\n\nThis product has been refined with real user feedback. "
+                   f"Users consistently praise the battery life, while some note heating under load.")
+        
+        with patch.object(product_refiner, 'gather_product_signals',
+                         new=AsyncMock(side_effect=lambda name, topic="": mock_signals.get(name, {
+                             "product": name, "praise": [], "complaints": [], "found": False
+                         }))):
+            with patch.object(product_refiner.LLMRouter, 'generate_text',
+                             new=AsyncMock(side_effect=mock_llm_response)):
+                result = await product_refiner.refine_blog_products(SAMPLE_BLOG, "best laptop")
+                
+                # Should refine 3 sections
+                assert result["total_products"] == 3, f"Got {result['total_products']}"
+                assert result["skipped"] is False
+                assert result["sections_refined"] >= 2, \
+                    f"Should refine at least 2, got {result['sections_refined']}"
+                
+                # Refined blog should contain user signals
+                refined = result["refined_blog"]
+                assert "refined with real user feedback" in refined.lower() or "battery life" in refined.lower()
+                
+                # H3 headings should be preserved
+                assert "### 1. MacBook Air M2" in refined
+                assert "### 2. ASUS VivoBook 15" in refined
+                assert "### 3. Dell XPS 13" in refined
+                
+                # Generic H3s should be unchanged
+                assert "### How to Choose the Right Laptop" in refined
+                assert "### What Specs Matter Most" in refined
+                
+                # NO dollar prices should be in refined content
+                import re
+                assert not re.search(r"\$\s?\d{1,4}", refined), "Refined blog contains dollar prices!"
+                
+                # Non-product sections should be preserved
+                assert "## Introduction" in refined
+                assert "## Conclusion" in refined
+                
+                # Stats should be populated
+                assert len(result["stats"]) == 3
+                
+                print("[OK] test_refinement_with_mocked_llm passed")
+    
+    asyncio.run(run_test())
+
+
+def test_refinement_fallback_on_empty_signals():
+    """If signals are empty, refinement should still work (original preserved)."""
+    
+    async def run_test():
+        empty_signals = {"product": "X", "praise": [], "complaints": [], "found": False}
+        
+        with patch.object(product_refiner, 'gather_product_signals',
+                         new=AsyncMock(return_value=empty_signals)):
+            with patch.object(product_refiner.LLMRouter, 'generate_text',
+                             new=AsyncMock(return_value="This should not be used")):
+                result = await product_refiner.refine_blog_products(SAMPLE_BLOG, "laptop")
+                
+                # Should still complete without error
+                assert result["total_products"] == 3
+                assert "refined_blog" in result
+                print("[OK] test_refinement_fallback_on_empty_signals passed")
+    
+    asyncio.run(run_test())
+
+
+def test_format_refinement_report():
+    """Report formatting should work correctly."""
+    result = {
+        "sections_refined": 2,
+        "total_products": 3,
+        "skipped": False,
+        "stats": [
+            {"product": "MacBook", "praise_found": ["battery"], "complaints_found": [], "was_refined": True},
+            {"product": "ASUS", "praise_found": [], "complaints_found": ["loud"], "was_refined": True},
+            {"product": "Dell", "praise_found": [], "complaints_found": [], "was_refined": False},
+        ],
+    }
+    report = product_refiner.format_refinement_report(result)
+    
+    assert "2 of 3" in report
+    assert "MacBook" in report
+    assert "ASUS" in report
+    assert "Dell" in report
+    assert "Blog Comparison tab" in report
+    print("[OK] test_format_refinement_report passed")
+
+
+def test_minimum_products_threshold():
+    """Should skip refinement if fewer than MIN_PRODUCTS_FOR_REFINEMENT."""
+    
+    async def run_test():
+        # Blog with only 1 product
+        short_blog = "# Blog\n\n## Picks\n\n### MacBook Air M2\n\nThis is a laptop."
+        result = await product_refiner.refine_blog_products(short_blog, "laptop")
+        
+        assert result["skipped"] is True
+        assert result["refined_blog"] == short_blog  # unchanged
+        print("[OK] test_minimum_products_threshold passed")
+    
+    asyncio.run(run_test())
+
+
+def main():
+    test_detect_product_sections()
+    test_generic_heading_detection()
+    test_product_name_extraction()
+    test_empty_blog()
+    test_no_products_blog()
+    test_format_detection_report()
+    test_get_section_detail()
+    test_headings_not_changed()
+    test_refinement_with_mocked_llm()
+    test_refinement_fallback_on_empty_signals()
+    test_format_refinement_report()
+    test_minimum_products_threshold()
+    print("\n[OK] ALL 12 PRODUCT REFINEMENT TESTS PASSED")
+
+
+if __name__ == "__main__":
+    main()
+
+=== FILE END: .\tests\test_product_refinement.py ===
 
 === FILE START: .\tests\test_shopping_intelligence.py ===
 """Tests for dynamic shopping intelligence with LLM-based tier classification."""

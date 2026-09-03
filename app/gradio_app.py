@@ -12,6 +12,16 @@ from core.exporters.markdown_converter import slugify
 from core.exporters.pdf_exporter import blog_to_pdf
 from core.exporters.static_exporter import export_post_to_uniscolian
 from core.interactive import InteractiveSession
+from core.post_processors.product_detector import (
+    detect_product_sections,
+    format_detection_report,
+    get_section_detail,
+    enhance_detection_with_llm,
+)
+from core.post_processors.product_refiner import (
+    refine_blog_products,
+    format_refinement_report,
+)
 
 
 # Global session manager (single global session with SQLite checkpointer)
@@ -280,6 +290,7 @@ async def assemble_blog_action(thread_id: str):
             gr.update(interactive=False),
             gr.update(interactive=False),
             gr.update(interactive=False),
+            "*No blog assembled yet.*",
         )
     
     try:
@@ -295,6 +306,7 @@ async def assemble_blog_action(thread_id: str):
                 gr.update(interactive=False),
                 gr.update(interactive=False),
                 gr.update(interactive=False),
+                "*Blog assembly failed.*",
             )
         
         # Calculate statistics
@@ -318,6 +330,7 @@ async def assemble_blog_action(thread_id: str):
             gr.update(interactive=True),
             gr.update(interactive=True),
             gr.update(interactive=True),
+            assembled_blog,
         )
     except Exception as e:
         logger.error(f"Blog assembly failed: {e}", exc_info=True)
@@ -327,7 +340,183 @@ async def assemble_blog_action(thread_id: str):
             gr.update(interactive=False),
             gr.update(interactive=False),
             gr.update(interactive=False),
+            f"❌ Assembly failed: {str(e)}",
         )
+
+
+async def detect_products_action(thread_id: str):
+    """Detect product H3 sections in the assembled blog. Returns: report, table, sections, dropdown, detail."""
+    empty_result = ("❌ No assembled blog found. Please assemble the blog first.",
+                   [], [], gr.update(choices=[], value=None), "*Run detection first.*")
+    
+    if not thread_id:
+        return ("❌ No active session.", [], [],
+               gr.update(choices=[], value=None), "*Run detection first.*")
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return ("❌ Session state not found.", [], [],
+                   gr.update(choices=[], value=None), "*Run detection first.*")
+        
+        blog_md = snap["values"].get("assembled_blog", "")
+        if not blog_md:
+            return empty_result
+        
+        sections = detect_product_sections(blog_md)
+        report = format_detection_report(sections)
+        
+        # Build table data with preview column
+        table_data = []
+        for i, s in enumerate(sections, 1):
+            preview = s["content"][:80].replace("\n", " ").replace("|", "/").strip() + "..."
+            table_data.append([i, s["product_name"], s["heading"], s["word_count"], preview])
+        
+        # Product names for dropdown
+        product_names = [s["product_name"] for s in sections]
+        dropdown_update = gr.update(
+            choices=product_names,
+            value=product_names[0] if product_names else None
+        )
+        
+        # Show first section detail by default
+        first_detail = get_section_detail(sections[0]) if sections else "*No products detected.*"
+        
+        return report, table_data, sections, dropdown_update, first_detail
+        
+    except Exception as e:
+        logger.error(f"Product detection failed: {e}")
+        return (f"❌ Detection failed: {str(e)}", [], [],
+               gr.update(choices=[], value=None), "*Detection failed.*")
+
+
+def show_section_detail_action(product_name: str, sections: list):
+    """Show the full section content for the selected product."""
+    if not product_name or not sections:
+        return "*Select a product to see the exact section that will be refined.*"
+    
+    for s in sections:
+        if s.get("product_name") == product_name:
+            return get_section_detail(s)
+    
+    return "*Section not found.*"
+
+
+async def refine_products_action(thread_id: str):
+    """Refine detected product sections with shopping signals + LLM.
+    Returns: report, refined_blog, original_blog (for comparison tab)."""
+    if not thread_id:
+        return "❌ No active session.", "", ""
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return "❌ Session state not found.", "", ""
+        
+        blog_md = snap["values"].get("assembled_blog", "")
+        topic = snap["values"].get("topic", "") or snap["values"].get("user_request", "")
+        
+        if not blog_md:
+            return "❌ No assembled blog found.", "", ""
+        
+        # Run refinement
+        result = await refine_blog_products(blog_md, topic)
+        report = format_refinement_report(result)
+        
+        logger.info(f"Refinement complete: {result['sections_refined']}/{result['total_products']} sections refined")
+        
+        return report, result["refined_blog"], blog_md
+        
+    except Exception as e:
+        logger.error(f"Product refinement failed: {e}")
+        return f"❌ Refinement failed: {str(e)}", "", ""
+
+
+async def export_refined_to_uniscolian_action(thread_id: str):
+    """Export the REFINED blog to Uniscolian (separate from original export)."""
+    if not thread_id:
+        return "❌ No active session."
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return "❌ Session state not found."
+        
+        refined_md = snap["values"].get("refined_blog", "")
+        if not refined_md:
+            return "❌ No refined blog found. Please run refinement first."
+        
+        topic = snap["values"].get("topic", "") or snap["values"].get("user_request", "")
+        
+        kw_data = snap["values"].get("keyword_research", {})
+        keywords = []
+        if isinstance(kw_data, dict):
+            keywords = [k.get("keyword", "") for k in kw_data.get("keywords", []) if isinstance(k, dict)][:5]
+        
+        # Call exporter in thread to not block async loop
+        result = await asyncio.to_thread(
+            export_post_to_uniscolian,
+            markdown=refined_md,
+            topic=topic,
+            keywords=keywords,
+            generate_image=True,
+            add_related=True,
+            update_sitemap=True,
+            avoid_duplicates=True,
+        )
+        
+        msg = ["## 🚀 REFINED Blog Published to Uniscolian!"]
+        msg.append(f"✅ **Post URL:** `/{result['slug']}/`")
+        msg.append(f"📊 **Word Count:** {result.get('word_count', 0)} words")
+        msg.append(f"✨ **Version:** Refined (with product signals)")
+        return "\n".join(msg)
+        
+    except Exception as e:
+        logger.error(f"Refined export failed: {e}")
+        return f"❌ Export failed: {str(e)}"
+
+
+async def enhance_detection_action(thread_id: str, current_sections: list):
+    """Use LLM to find any missed products."""
+    if not thread_id:
+        return "❌ No active session.", current_sections
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return "❌ Session state not found.", current_sections
+        
+        blog_md = snap["values"].get("assembled_blog", "")
+        if not blog_md:
+            return "❌ No assembled blog found.", current_sections
+        
+        # Get currently detected product names
+        current_names = [s["product_name"] for s in current_sections]
+        
+        # Call LLM enhancement
+        additional = await enhance_detection_with_llm(blog_md, current_names)
+        
+        if not additional:
+            return "✅ **No additional products found.** Code-based detection caught them all!", current_sections
+        
+        # Re-detect with enhanced list (this is simplified — in practice you'd add new sections)
+        report = f"🤖 **AI Enhancement Found {len(additional)} Additional Product(s):**\n\n"
+        report += "\n".join(f"- {p}" for p in additional)
+        report += "\n\n💡 *To refine these, manually add them to the detection or proceed with current list.*"
+        
+        return report, current_sections  # For now, just report — full integration would require more work
+        
+    except Exception as e:
+        logger.error(f"Enhancement failed: {e}")
+        return f"❌ Enhancement failed: {str(e)}", current_sections
 
 
 async def publish_to_uniscolian_action(thread_id: str):
@@ -504,6 +693,87 @@ def create_ui():
                         interactive=False  # Will be enabled when blog is assembled
                     )
                 publish_status_md = gr.Markdown("*Generate and assemble a blog first, then click publish.*")
+
+            # === NEW TAB: Product Detection ===
+            with gr.Tab("🔍 Product Detection"):
+                gr.Markdown("### 🔍 Product Section Detection")
+                gr.Markdown("*Detects product-specific H3 sections in your assembled blog. "
+                           "Code-based detection (no LLM) for speed and accuracy.*")
+                
+                detect_btn = gr.Button(
+                    "🔍 Detect Product Sections",
+                    variant="secondary",
+                    size="lg",
+                )
+                
+                detection_report_md = gr.Markdown("*Click 'Detect Product Sections' after assembling your blog.*")
+                
+                detection_table = gr.Dataframe(
+                    headers=["#", "Product Name", "H3 Heading", "Words", "Section Preview"],
+                    label="Detected Product Sections",
+                    interactive=False,
+                )
+                
+                gr.Markdown("---")
+                gr.Markdown("### 🔎 Inspect Section Before Refining")
+                gr.Markdown("*Select a product to see the exact section content that will be refined.*")
+                
+                product_dropdown = gr.Dropdown(
+                    label="Select Product to Inspect",
+                    choices=[],
+                    interactive=True,
+                )
+                
+                section_detail_md = gr.Markdown("*Run detection first.*")
+                
+                gr.Markdown("---")
+                
+                # NEW: Enhancement button
+                enhance_btn = gr.Button(
+                    "🤖 Enhance with AI (Find Missed Products)",
+                    variant="secondary",
+                    size="sm",
+                )
+                enhancement_report_md = gr.Markdown("")
+                
+                refine_btn = gr.Button(
+                    "✨ Refine Product Sections (with Shopping Signals)",
+                    variant="primary",
+                    size="lg",
+                )
+                
+                refinement_report_md = gr.Markdown("")
+                
+                # Hidden state to store detected sections and refined blog
+                detected_sections_state = gr.State([])
+                refined_blog_state = gr.State("")
+                original_blog_state = gr.State("")
+
+            # === NEW TAB: Blog Comparison & Export ===
+            with gr.Tab("📝 Blog Comparison & Export"):
+                gr.Markdown("### 📝 Original vs Refined Blog")
+                gr.Markdown("*Compare the original and refined versions. Export whichever you prefer.*")
+                
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("#### 📄 Original Blog")
+                        original_blog_display = gr.Markdown("*Original assembled blog will appear here after assembly.*")
+                        export_original_btn = gr.Button(
+                            "🚀 Export ORIGINAL to Uniscolian",
+                            variant="secondary",
+                            size="lg",
+                        )
+                        original_export_status = gr.Markdown("")
+                    
+                    with gr.Column():
+                        gr.Markdown("#### ✨ Refined Blog")
+                        refined_blog_display = gr.Markdown("*Refined blog will appear here after refinement.*")
+                        export_refined_btn = gr.Button(
+                            "🚀 Export REFINED to Uniscolian",
+                            variant="primary",
+                            size="lg",
+                        )
+                        refined_export_status = gr.Markdown("")
         
         # === EVENT HANDLERS WITH DOUBLE-CLICK PREVENTION ===
         
@@ -571,7 +841,7 @@ def create_ui():
         assemble_btn.click(
             fn=assemble_blog_action,
             inputs=[thread_id_state],
-            outputs=[final_blog_md, blog_stats, download_md_btn, download_pdf_btn, publish_uniscolian_btn],
+            outputs=[final_blog_md, blog_stats, download_md_btn, download_pdf_btn, publish_uniscolian_btn, original_blog_display],
         )
         download_md_btn.click(fn=download_markdown_action, inputs=[thread_id_state], outputs=[download_file])
         download_pdf_btn.click(fn=download_pdf_action, inputs=[thread_id_state], outputs=[download_file])
@@ -579,6 +849,58 @@ def create_ui():
             fn=publish_to_uniscolian_action,
             inputs=[thread_id_state],
             outputs=[publish_status_md]
+        )
+
+        # Product Detection wiring (5 outputs)
+        detect_btn.click(
+            fn=detect_products_action,
+            inputs=[thread_id_state],
+            outputs=[
+                detection_report_md,
+                detection_table,
+                detected_sections_state,
+                product_dropdown,
+                section_detail_md,
+            ],
+        )
+        
+        # Show section detail when dropdown changes
+        product_dropdown.change(
+            fn=show_section_detail_action,
+            inputs=[product_dropdown, detected_sections_state],
+            outputs=[section_detail_md],
+        )
+
+        # AI Enhancement wiring
+        enhance_btn.click(
+            fn=enhance_detection_action,
+            inputs=[thread_id_state, detected_sections_state],
+            outputs=[enhancement_report_md, detected_sections_state],
+        )
+        
+        # Refine button wiring — updates report, refined state, original state, and displays
+        refine_btn.click(
+            fn=refine_products_action,
+            inputs=[thread_id_state],
+            outputs=[refinement_report_md, refined_blog_state, original_blog_state],
+        ).then(
+            fn=lambda r, o: (o if o else "*No blog assembled yet.*",
+                            r if r else "*Run refinement first to see the refined version.*"),
+            inputs=[refined_blog_state, original_blog_state],
+            outputs=[original_blog_display, refined_blog_display],
+        )
+        
+        # Export buttons wiring
+        export_original_btn.click(
+            fn=publish_to_uniscolian_action,
+            inputs=[thread_id_state],
+            outputs=[original_export_status],
+        )
+        
+        export_refined_btn.click(
+            fn=export_refined_to_uniscolian_action,
+            inputs=[thread_id_state],
+            outputs=[refined_export_status],
         )
     
     return demo

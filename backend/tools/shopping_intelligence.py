@@ -18,6 +18,20 @@ RETAILERS = {
     "target", "costco", "b&h", "bhphotovideo", "micro center",
 }
 
+# Known brands and their product lines for product detection
+KNOWN_BRANDS = {
+    "apple": ["macbook air", "macbook pro", "macbook", "ipad", "iphone", "watch", "airpods"],
+    "asus": ["vivobook", "zenbook", "rog", "tuf"],
+    "dell": ["xps", "inspiron", "latitude", "alienware"],
+    "lenovo": ["thinkpad", "ideapad", "legion", "yoga"],
+    "hp": ["spectre", "envy", "pavilion", "elitebook", "omen"],
+    "microsoft": ["surface pro", "surface laptop", "surface"],
+    "acer": ["aspire", "predator", "swift", "nitro"],
+    "msi": ["stealth", "raider", "katana", "vector"],
+    "samsung": ["galaxy", "odyssey", "tab"],
+    "sony": ["wh-1000xm4", "wh-1000xm5", "wf-1000xm5", "bravia", "playstation"],
+}
+
 # Tier keywords for context extraction
 TIER_KEYWORDS = {
     "premium": ["premium", "high-end", "flagship", "top tier", "luxury", "expensive", "best of the best", "pro"],
