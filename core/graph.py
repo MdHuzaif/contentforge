@@ -227,6 +227,16 @@ Provide a comprehensive SEO competitor analysis and content gap blueprint."""
         logger.warning("Competitor LLM analysis failed: %s. Using fallback.", e)
         analysis_text = f"Fallback competitor analysis for {topic}."
 
+    # --- NEW: shopping/user signals enrichment (optional, never fatal) ---
+    try:
+        from backend.tools.shopping_intelligence import gather_shopping_signals
+        signals = await gather_shopping_signals(topic)
+        if signals:
+            analysis_text = (analysis_text or "") + "\n\n" + signals
+            logger.info("Shopping signals appended (%d chars)", len(signals))
+    except Exception as e:
+        logger.warning("Shopping intelligence skipped: %s", e)
+
     return {
         "competitor_analysis": {
             "status": "completed",
