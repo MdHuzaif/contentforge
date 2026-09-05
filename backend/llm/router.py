@@ -20,13 +20,14 @@ FALLBACK_MESSAGE = (
 class LLMRouter:
     """Gemini-only LLM router with 429-aware retry handled inside _call_gemini."""
     
-    def __init__(self, gemini_api_key: Optional[str] = None, timeout: float = 120.0):
+    def __init__(self, gemini_api_key: Optional[str] = None, timeout: float = 120.0, task_type: str = "default", **kwargs):
         self.gemini_api_key = (
             gemini_api_key
             if gemini_api_key is not None
             else getattr(config, "GEMINI_API_KEY", "")
         )
         self.timeout = timeout
+        self.task_type = task_type
     
     async def generate_text(
         self,

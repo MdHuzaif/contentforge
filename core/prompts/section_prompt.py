@@ -76,4 +76,32 @@ ADDITIONAL SEO RULES:
 - The provided PRIMARY KEYWORD must appear in the first 100 words of the section when natural.
 - Use SECONDARY KEYWORDS only where they fit naturally; never force them.
 - If GAP ANALYSIS INSIGHTS mention topics missing from competitor content, cover them in this section when relevant.
+
+ADVANCED RANKING RULES (for Google top positions):
+
+1. OPENING HOOK (first 50 words):
+   - Start with a pain point question OR surprising statistic
+   - Example: "Struggling to find a motherboard that handles the 9800X3D's thermal demands?"
+   - Example: "87% of AM5 builds fail to leverage X3D cache properly — here's why."
+
+2. E-E-A-T SIGNALS (demonstrate expertise):
+   - Use first-person testing language: "In our testing...", "We benchmarked..."
+   - Include specific numbers: "achieved 5.2 GHz sustained", "37°C under load"
+   - Mention methodology: "using HWMonitor and Cinebench R23"
+
+3. FEATURED SNIPPET STRUCTURES (when applicable):
+   - DEFINITION: 40-60 word paragraph starting with "[Term] is..."
+   - HOW-TO: Numbered list with 5-7 clear steps
+   - COMPARISON: Markdown table with 5+ columns
+   - LIST: Bulleted list with 5-10 items
+
+4. ENGAGEMENT TECHNIQUES:
+   - Ask rhetorical questions mid-section (not more than 2 per section)
+   - Use "you" address for direct connection
+   - Include "Pro tip:" or "Expert note:" callouts
+
+5. CLOSING MOMENTUM:
+   - End with a transition hook to the next section
+   - Example: "Now that you understand VRM quality, let's explore connectivity options..."
+   - Never end with generic "In conclusion" unless it's the final section
 """

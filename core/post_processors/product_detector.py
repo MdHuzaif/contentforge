@@ -99,47 +99,66 @@ def _extract_product_name(title: str) -> str:
     return ""
 
 
-async def detect_product_sections(blog_markdown: str, use_llm: bool = True) -> List[Dict]:
+def detect_product_sections(blog_markdown: str) -> List[Dict]:
     """Detect all product-specific H3 sections in the blog.
     
-    Two-phase approach:
-    1. LLM identifies all product names in the blog (if use_llm=True)
-    2. Code scans sections to find where each product is primarily discussed
+    Returns list of dicts with: heading, product_name, content, start, end, word_count
     """
     if not blog_markdown or not blog_markdown.strip():
         return []
     
-    # PHASE 1: Get product names (LLM or fallback to regex)
-    product_names = []
-    if use_llm:
-        product_names = await _extract_products_with_llm(blog_markdown)
-    
-    # Fallback to regex if LLM failed or returned empty
-    if not product_names:
-        logger.info("LLM detection empty, falling back to regex pattern matching")
-        product_names = _extract_products_with_regex(blog_markdown)
-    
-    if not product_names:
-        logger.warning("No products detected by either method")
-        return []
-    
-    logger.info(f"Detected {len(product_names)} unique products: {product_names[:5]}...")
-    
-    # PHASE 2: Find sections for each product
     headings = _extract_headings_with_positions(blog_markdown)
     h3_headings = [h for h in headings if h["level"] == 3]
     
     product_sections = []
     
-    for product_name in product_names:
-        # Find the section where this product is PRIMARILY discussed
-        best_section = _find_product_section(product_name, h3_headings, headings, blog_markdown)
+    for heading in h3_headings:
+        # Skip generic headings
+        if _is_generic_heading(heading["title"]):
+            continue
         
-        if best_section:
-            product_sections.append(best_section)
+        # Extract product name
+        product_name = _extract_product_name(heading["title"])
+        if not product_name:
+            continue
+        
+        # Skip retailers
+        if product_name.lower() in RETAILERS:
+            continue
+        
+        # Determine section content boundaries
+        content_start = heading["end"]
+        next_headings = [h for h in headings if h["start"] > content_start]
+        if next_headings:
+            content_end = min(h["start"] for h in next_headings)
+        else:
+            content_end = len(blog_markdown)
+        
+        section_content = blog_markdown[content_start:content_end].strip()
+        
+        product_sections.append({
+            "heading": heading["title"],
+            "product_name": product_name,
+            "content": section_content,
+            "start": heading["start"],
+            "end": content_end,
+            "word_count": len(section_content.split()),
+        })
     
-    logger.info(f"Mapped {len(product_sections)} products to sections")
-    return product_sections
+    # Deduplicate by full product_name (keep first occurrence)
+    seen = set()
+    unique_sections = []
+    for section in product_sections:
+        key = section["product_name"].lower().strip()
+        # Skip if too short (probably just a brand name)
+        if len(key) < 5:
+            continue
+        if key not in seen:
+            seen.add(key)
+            unique_sections.append(section)
+    
+    logger.info("Detected %d product sections in blog", len(unique_sections))
+    return unique_sections
 
 
 async def _extract_products_with_llm(blog_markdown: str) -> List[str]:

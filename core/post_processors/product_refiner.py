@@ -65,17 +65,19 @@ async def gather_product_signals(product_name: str, topic: str = "") -> Dict:
     }
 
 
-REFINE_SYSTEM_PROMPT = """You are an expert product review editor. You will refine a specific product section by naturally integrating real user feedback signals.
+REFINE_SYSTEM_PROMPT = """You are an expert product review editor enhancing existing content with real user feedback.
 
-CRITICAL RULES:
-1. PRESERVE the original writing style, tone, and voice exactly
-2. KEEP all original facts, specs, and data — do NOT remove or change them
-3. Do NOT change or remove the H3 heading (first line starting with ###)
-4. Add only 2-3 sentences of user sentiment, woven naturally into the text
-5. NEVER add specific dollar amounts ($X, $X.XX) — use relative terms like "great value", "premium-tier", "budget-friendly"
-6. Aim to keep length close to the original, but a 20-40% increase is acceptable when adding user sentiment
-7. Use natural phrases like "Users consistently praise...", "Real-world feedback highlights...", "A common concern among owners is..."
-8. Output ONLY the refined section content (including the H3 heading line), nothing else. Do NOT wrap output in code fences."""
+ABSOLUTE TONE PRESERVATION RULES:
+1. Match the EXACT narrative voice: if original uses "you" address, keep "you"; if "we", keep "we"; if third-person, keep third-person
+2. Preserve sentence rhythm, paragraph structure, and formality level exactly
+3. Keep ALL existing keywords, SEO terms, and technical terminology intact
+4. Match the original's enthusiasm level (don't make casual content formal or vice versa)
+5. User feedback must read as if the ORIGINAL AUTHOR wrote it — seamless integration
+6. Use meta-phrases like "users report" or "owners mention" AT MOST ONCE in the entire section
+7. NEVER start sentences with "According to" or "Users say" repeatedly
+8. Preserve all headings, bullet points, and formatting exactly
+9. Do NOT add specific dollar prices ($X, $X.XX) — use relative terms only
+10. Output ONLY the enhanced section — no explanations, no preamble, no code fences"""
 
 
 async def refine_single_section(
@@ -87,32 +89,50 @@ async def refine_single_section(
     original_content = section["content"]
     original_heading = section["heading"]
     
-    # Build context: blog tone sample + surrounding structure
-    context_sample = blog_context[:800] if blog_context else ""
-    
-    praise_str = ", ".join(signals["praise"]) if signals["praise"] else "none detected"
-    complaints_str = ", ".join(signals["complaints"]) if signals["complaints"] else "none detected"
-    
-    user_prompt = f"""BLOG TONE REFERENCE (match this writing style):
+    praise_str = ", ".join(signals.get("praise", [])[:3]) if signals.get("praise") else ""
+    complaints_str = ", ".join(signals.get("complaints", [])[:2]) if signals.get("complaints") else ""
+
+    feedback_lines = []
+    if praise_str:
+        feedback_lines.append(f"What real users praise: {praise_str}")
+    if complaints_str:
+        feedback_lines.append(f"Common concerns mentioned: {complaints_str}")
+
+    if not feedback_lines:
+        return f"### {original_heading}\n{original_content}"  # Nothing to integrate
+
+    feedback_block = "\n".join(f"- {line}" for line in feedback_lines)
+
+    # Build context sample (first 600 chars of blog for tone reference)
+    context_sample = blog_context[:600] if blog_context else ""
+
+    user_prompt = f"""BLOG TONE REFERENCE (match this writing style exactly):
 \"\"\"
 {context_sample}
 \"\"\"
 
-ORIGINAL SECTION TO REFINE:
+SECTION TO ENHANCE:
 \"\"\"
 ### {original_heading}
 {original_content}
 \"\"\"
 
-PRODUCT: {section['product_name']}
-REAL USER SIGNALS (from Reddit/Amazon/review sites):
-- What users praise: {praise_str}
-- Common complaints: {complaints_str}
+PRODUCT: {section.get('product_name', '')}
 
-TASK: Rewrite the section content, naturally integrating the user signals while preserving the exact tone, facts, and H3 heading. Output only the refined section (starting with the ### heading). Do NOT wrap output in code fences."""
+REAL USER FEEDBACK TO INTEGRATE:
+{feedback_block}
+
+TASK: Rewrite the section naturally weaving in the user feedback while preserving:
+- The exact same tone, voice, and formality
+- All original facts, specs, and information
+- The same paragraph structure and flow
+- The ### heading unchanged
+
+Add only 2-3 sentences of user sentiment, woven naturally into existing paragraphs.
+Output ONLY the enhanced section starting with the ### heading. No code fences."""
 
     try:
-        router = LLMRouter()
+        router = LLMRouter(task_type="section_writing")
         refined = await router.generate_text(
             prompt=user_prompt,
             system_prompt=REFINE_SYSTEM_PROMPT,
@@ -136,7 +156,7 @@ TASK: Rewrite the section content, naturally integrating the user signals while 
         return refined
         
     except Exception as e:
-        logger.warning("LLM refinement failed for %s: %s", section['product_name'], e)
+        logger.warning("LLM refinement failed for %s: %s", section.get('product_name', ''), e)
         return f"### {original_heading}\n{original_content}"
 
 
@@ -145,7 +165,7 @@ async def refine_blog_products(blog_markdown: str, topic: str = "") -> Dict:
     
     Returns dict with: refined_blog, sections_refined, total_products, stats, skipped, reason
     """
-    sections = await detect_product_sections(blog_markdown, use_llm=True)
+    sections = detect_product_sections(blog_markdown)
     
     if len(sections) < MIN_PRODUCTS_FOR_REFINEMENT:
         return {

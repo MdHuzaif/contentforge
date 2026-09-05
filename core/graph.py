@@ -211,28 +211,96 @@ Output ONLY valid JSON, no markdown code blocks."""
         }
 
     # --- EXISTING: LLM gap analysis (now includes structure) ---
+    gap_analysis = {}
     try:
         router = LLMRouter()
-        prompt = f"""Topic: {topic}
+        prompt = f"""You are an expert SEO content strategist. Analyze these competitors for topic: "{topic}"
 
-Scraped competitor metrics: {metrics}
-Competitor pages: {sources}
-Optimal content structure: {json.dumps(content_structure)}
+COMPETITOR DATA:
+- Pages analyzed: {len(sources)}
+- Scraped metrics: {metrics}
+- Page URLs: {', '.join(sources[:5])}
 
-Provide a comprehensive SEO competitor analysis and content gap blueprint."""
+OPTIMAL STRUCTURE FOUND:
+{json.dumps(content_structure, indent=2)[:1500]}
+
+ANALYZE AND RETURN JSON with EXACTLY these keys:
+
+{{
+    "competitor_ranking_strengths": [
+        "Why these pages rank well in Google (list 3-5 specific reasons)",
+        "Example: 'Comprehensive spec tables with 8+ data columns'",
+        "Example: 'Real benchmark data from hands-on testing'",
+        "Example: 'Expert quotes from industry professionals'",
+        "Example: 'Detailed pros/cons for each product reviewed'"
+    ],
+    "competitor_weaknesses": [
+        "What competitors miss or do poorly (3-5 items)",
+        "Example: 'Generic introductions without pain-point hooks'",
+        "Example: 'Missing real user feedback and reviews'"
+    ],
+    "content_gaps_to_fill": [
+        "Topics/angles we should cover that competitors miss (3-5 items)"
+    ],
+    "must_match_benchmarks": [
+        "Features we MUST match to compete (3-5 items)",
+        "Example: 'Detailed spec comparison tables'",
+        "Example: 'Minimum 6 product reviews per category'"
+    ],
+    "user_intent": "informational|commercial|transactional|mixed",
+    "user_pain_points": [
+        "Specific problems readers have when searching this topic (3 items)"
+    ],
+    "featured_snippet_opportunities": [
+        "Structured content formats that could win Position 0 (2-3 items)",
+        "Example: 'Definition paragraph for what is X870E chipset'",
+        "Example: 'Numbered list of 7 buying criteria'"
+    ],
+    "engagement_hooks_needed": [
+        "Opening questions or hooks to capture attention (3 items)"
+    ]
+}}
+
+Return ONLY valid JSON, no markdown, no explanation."""
         analysis_text = await router.generate_text(
-            prompt, system_prompt="You are an expert SEO competitor analyst.", task_type="competitor_analysis"
+            prompt, system_prompt="You are an expert SEO competitor analyst. Return only valid JSON.", task_type="competitor_analysis"
         )
+        
+        # Parse JSON
+        if "```json" in analysis_text:
+            analysis_text = analysis_text.split("```json")[1].split("```")[0]
+        elif "```" in analysis_text:
+            analysis_text = analysis_text.split("```")[1].split("```")[0]
+            
+        gap_analysis = json.loads(analysis_text.strip())
     except Exception as e:
         logger.warning("Competitor LLM analysis failed: %s. Using fallback.", e)
-        analysis_text = f"Fallback competitor analysis for {topic}."
+        gap_analysis = {}
+
+    default_gap = {
+        "competitor_ranking_strengths": ["Comprehensive coverage", "Clear structure", "Detailed spec comparisons"],
+        "competitor_weaknesses": ["Generic content", "Missing real user feedback"],
+        "content_gaps_to_fill": ["Real user feedback", "Hands-on testing data"],
+        "must_match_benchmarks": ["Detailed specs", "Pros/cons lists", "Clear pricing tiering"],
+        "user_intent": "commercial",
+        "user_pain_points": ["Too many options", "Confusing specs", "Budget concerns"],
+        "featured_snippet_opportunities": ["Definition paragraph", "Numbered list of buying criteria"],
+        "engagement_hooks_needed": ["Opening question", "Pain point hook", "Expert claim"],
+    }
+    if not isinstance(gap_analysis, dict):
+        gap_analysis = default_gap
+    else:
+        for k, v in default_gap.items():
+            if k not in gap_analysis or not gap_analysis[k]:
+                gap_analysis[k] = v
 
     # --- NEW: shopping/user signals enrichment (optional, never fatal) ---
     try:
         from backend.tools.shopping_intelligence import gather_shopping_signals
         signals = await gather_shopping_signals(topic)
         if signals:
-            analysis_text = (analysis_text or "") + "\n\n" + signals
+            if isinstance(gap_analysis, dict):
+                gap_analysis["shopping_signals"] = signals
             logger.info("Shopping signals appended (%d chars)", len(signals))
     except Exception as e:
         logger.warning("Shopping intelligence skipped: %s", e)
@@ -484,8 +552,28 @@ async def section_writer_node(state: ContentForgeState) -> Dict[str, Any]:
         elif k.lower() != primary_keyword.lower() and len(secondary_keywords) < 8:
             secondary_keywords.append(k)
 
-    gap_analysis = str(competitor_data.get("gap_analysis", "") or "")
-    gap_summary = gap_analysis[:1500] if gap_analysis else "No gap analysis available."
+    # Extract enhanced data from competitor_analysis (which contains gap analysis)
+    comp_data = state.get("competitor_analysis", {})
+    gap_data = comp_data.get("gap_analysis", {})
+
+    if isinstance(gap_data, dict):
+        ranking_strengths = gap_data.get("competitor_ranking_strengths", [])
+        user_intent = gap_data.get("user_intent", "commercial")
+        user_pain_points = gap_data.get("user_pain_points", [])
+        snippet_opportunities = gap_data.get("featured_snippet_opportunities", [])
+        engagement_hooks = gap_data.get("engagement_hooks_needed", [])
+        must_match = gap_data.get("must_match_benchmarks", [])
+        gaps_list = gap_data.get("content_gaps_to_fill", [])
+        gap_summary = "\n".join(f"- {g}" for g in gaps_list) if gaps_list else "No gap analysis available."
+    else:
+        ranking_strengths = ["Comprehensive coverage", "Clear structure"]
+        user_intent = "commercial"
+        user_pain_points = ["Too many options", "Confusing specs", "Budget concerns"]
+        snippet_opportunities = ["Definition paragraph", "Numbered list"]
+        engagement_hooks = ["Opening question", "Pain point hook", "Expert claim"]
+        must_match = ["Detailed specs", "Pros/cons lists"]
+        gap_summary = str(gap_data) if gap_data else "No gap analysis available."
+
     metrics = competitor_data.get("metrics", {}) or {}
     competitor_benchmarks = (
         ", ".join(f"{k}: {v}" for k, v in metrics.items())
@@ -508,42 +596,57 @@ async def section_writer_node(state: ContentForgeState) -> Dict[str, Any]:
         placement_hint = ("This is a MIDDLE section: prefer semantic variations; use the exact "
                           "primary keyword only if it fits 100% naturally (max once).")
 
-    section_prompt_text = f"""
-TOPIC: {topic}
-
-=== SEO RESEARCH DATA (weave in naturally; never mention this block to the reader) ===
-PRIMARY KEYWORD: {primary_keyword}
-SECONDARY KEYWORDS: {', '.join(secondary_keywords) or 'None'}
-GAP ANALYSIS INSIGHTS: {gap_summary}
-COMPETITOR BENCHMARKS: {competitor_benchmarks}
-
-CURRENT SECTION DETAILS:
-- Section Number: {current_idx + 1} of {total}
+    current_section_details = f"""- Section Number: {current_idx + 1} of {total}
 - Title: {current_prompt.get('title', 'Untitled Section')}
 - Target Word Count: {current_prompt.get('word_target', 600)} words
 - Key Points to Cover: {', '.join(current_prompt.get('key_points', []))}
 - Detailed Instructions: {current_prompt.get('prompt', 'Write this section')}
 
-{accumulated_context}
+{accumulated_context}"""
 
-⚠️ MANDATORY ENGAGEMENT CHECKLIST FOR THIS SECTION:
-Before finishing this section, verify you have included:
-- [ ] A strong hook (question/stat) in the first 2 sentences?
-- [ ] At least one "In my testing..." or similar first-person experience phrase? (Or "From my experience explaining this concept..." if educational/definitional)
-- [ ] At least one Markdown table OR bulleted/numbered list?
-- [ ] At least one `> **💡 Quick Tip:** ...` blockquote callout?
-If any of these are missing, the section will be rejected. Ensure they are naturally integrated.
+    section_prompt_text = f"""TOPIC: {topic}
 
---- YOUR TASK ---
-Write Section {current_idx + 1} following the instructions above. Remember to:
-- Use the EXACT primary keyword AT MOST ONCE in this section (first 100 words or a heading); for all other mentions use natural semantic variations (synonyms, rephrasings, partial matches). Include 1-2 SECONDARY KEYWORDS only where they fit naturally.
-- {placement_hint}
-- Address at least one gap or weakness identified in GAP ANALYSIS INSIGHTS to beat competitors
-- Match or exceed the COMPETITOR BENCHMARKS (depth, structure, readability)
-- Maintain flow from previous sections (use the context provided)
-- Hit the target word count (500-2000 words as specified in the prompt)
-- Include all key points naturally
-- Use engaging, professional tone
+=== SEO & COMPETITIVE INTELLIGENCE ===
+USER INTENT: {user_intent} (match this intent in tone and depth)
+PRIMARY KEYWORD: {primary_keyword}
+SECONDARY KEYWORDS: {', '.join(secondary_keywords) or 'None'}
+
+USER PAIN POINTS TO ADDRESS (weave naturally):
+{chr(10).join(f"- {p}" for p in user_pain_points[:3])}
+
+COMPETITOR RANKING STRENGTHS (match or exceed these):
+{chr(10).join(f"- {s}" for s in ranking_strengths[:4])}
+
+MUST-MATCH BENCHMARKS:
+{chr(10).join(f"- {b}" for b in must_match[:3])}
+
+FEATURED SNIPPET OPPORTUNITY (if this section fits, use it):
+{chr(10).join(f"- {o}" for o in snippet_opportunities[:2])}
+
+CONTENT GAPS TO FILL:
+{gap_summary}
+
+COMPETITOR BENCHMARKS:
+{competitor_benchmarks}
+
+ENGAGEMENT HOOKS AVAILABLE:
+{chr(10).join(f"- {h}" for h in engagement_hooks[:2])}
+
+CURRENT SECTION DETAILS:
+{current_section_details}
+
+CRITICAL RANKING REQUIREMENTS:
+1. Match competitor strengths listed above (don't fall below their quality)
+2. Address at least ONE user pain point naturally
+3. Use engagement hooks in opening/closing paragraphs
+4. If a featured snippet opportunity fits this section, structure content to capture it:
+   - For definitions: write a 40-60 word definitive answer early
+   - For lists: use numbered/bulleted lists with 5-7 items
+   - For tables: use markdown tables with 5+ columns when comparing
+5. Include E-E-A-T signals: specific numbers, testing methodology, hands-on experience language
+6. Primary keyword AT MOST ONCE (first 100 words or heading); use semantic variations elsewhere
+7. Match competitor word depth and structure
+8. Address at least one gap identified in GAP ANALYSIS
 """
     
     # Call Gemini to generate the section
@@ -625,6 +728,88 @@ Write Section {current_idx + 1} following the instructions above. Remember to:
                 "status": "completed",
             })
         
+        # === AUTO-REFINEMENT: Section-level product detection ===
+        try:
+            from core.post_processors.product_detector import (
+                PRODUCT_PATTERN,
+                _extract_product_name,
+                RETAILERS
+            )
+            from core.post_processors.product_refiner import (
+                gather_product_signals,
+                refine_single_section
+            )
+            
+            # Safe access to state variables
+            sub_prompts_list = state.get("sub_prompts", [])
+            section_topic = state.get("topic", "") or state.get("user_request", "")
+            
+            if current_idx < len(sub_prompts_list) and current_idx < len(generated_sections):
+                section_title = sub_prompts_list[current_idx].get("title", "")
+                section_content = generated_sections[current_idx].get("content", "")
+                
+                if section_content and len(section_content) > 100:
+                    # Step 1: Try to extract product name from heading
+                    product_name = _extract_product_name(section_title)
+                    
+                    # Step 2: If not in heading, scan first 500 chars of content
+                    if not product_name:
+                        content_sample = section_content[:500]
+                        match = PRODUCT_PATTERN.search(content_sample)
+                        if match:
+                            candidate = match.group(1).strip()
+                            if candidate.lower() not in RETAILERS and len(candidate) > 5:
+                                product_name = candidate
+                    
+                    # Step 3: If product found, auto-refine
+                    if product_name:
+                        logger.info(f"Section {current_idx + 1}: Product detected '{product_name}', auto-refining...")
+                        
+                        try:
+                            signals = await gather_product_signals(product_name, section_topic)
+                            
+                            if signals.get("found", False):
+                                section_dict = {
+                                    "heading": section_title,
+                                    "product_name": product_name,
+                                    "content": section_content,
+                                    "start": 0,
+                                    "end": len(section_content),
+                                    "word_count": len(section_content.split())
+                                }
+                                
+                                # Build context from previous sections
+                                blog_context = "\n\n".join([
+                                    s.get("content", "")[:400]
+                                    for s in generated_sections[:current_idx]
+                                    if s.get("content")
+                                ])
+                                
+                                refined_content = await refine_single_section(
+                                    section_dict,
+                                    signals,
+                                    blog_context
+                                )
+                                
+                                # Only update if refinement actually changed content
+                                if refined_content and refined_content != section_content:
+                                    generated_sections[current_idx]["content"] = refined_content
+                                    generated_sections[current_idx]["refined"] = True
+                                    generated_sections[current_idx]["product_name"] = product_name
+                                    logger.info(f"✓ Section {current_idx + 1} refined for '{product_name}'")
+                                else:
+                                    logger.info(f"Section {current_idx + 1}: Refinement returned same content, keeping original")
+                            else:
+                                logger.info(f"Section {current_idx + 1}: No shopping signals found for '{product_name}', keeping original")
+                                
+                        except Exception as refine_err:
+                            logger.warning(f"Section {current_idx + 1}: Auto-refinement failed (keeping original): {refine_err}")
+                            
+        except ImportError as imp_err:
+            logger.warning(f"Auto-refinement imports failed (skipping): {imp_err}")
+        except Exception as e:
+            logger.warning(f"Section {current_idx + 1}: Auto-refinement skipped due to error: {e}")
+
         # Rate limit protection: wait before next section
         if current_idx < total - 1:
             logger.info(f"Section {current_idx + 1} complete. Waiting 5s to avoid API rate limits...")
