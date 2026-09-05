@@ -2,7 +2,7 @@
 Code-based detection using KNOWN_BRANDS dictionary — NO LLM involved."""
 from __future__ import annotations
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from app.config import logger
 from backend.tools.shopping_intelligence import KNOWN_BRANDS, RETAILERS
@@ -99,36 +99,138 @@ def _extract_product_name(title: str) -> str:
     return ""
 
 
-def detect_product_sections(blog_markdown: str) -> List[Dict]:
+async def detect_product_sections(blog_markdown: str, use_llm: bool = True) -> List[Dict]:
     """Detect all product-specific H3 sections in the blog.
     
-    Returns list of dicts with: heading, product_name, content, start, end, word_count
+    Two-phase approach:
+    1. LLM identifies all product names in the blog (if use_llm=True)
+    2. Code scans sections to find where each product is primarily discussed
     """
     if not blog_markdown or not blog_markdown.strip():
         return []
     
+    # PHASE 1: Get product names (LLM or fallback to regex)
+    product_names = []
+    if use_llm:
+        product_names = await _extract_products_with_llm(blog_markdown)
+    
+    # Fallback to regex if LLM failed or returned empty
+    if not product_names:
+        logger.info("LLM detection empty, falling back to regex pattern matching")
+        product_names = _extract_products_with_regex(blog_markdown)
+    
+    if not product_names:
+        logger.warning("No products detected by either method")
+        return []
+    
+    logger.info(f"Detected {len(product_names)} unique products: {product_names[:5]}...")
+    
+    # PHASE 2: Find sections for each product
     headings = _extract_headings_with_positions(blog_markdown)
     h3_headings = [h for h in headings if h["level"] == 3]
     
     product_sections = []
+    
+    for product_name in product_names:
+        # Find the section where this product is PRIMARILY discussed
+        best_section = _find_product_section(product_name, h3_headings, headings, blog_markdown)
+        
+        if best_section:
+            product_sections.append(best_section)
+    
+    logger.info(f"Mapped {len(product_sections)} products to sections")
+    return product_sections
+
+
+async def _extract_products_with_llm(blog_markdown: str) -> List[str]:
+    """Use LLM to extract all specific product names from the blog."""
+    try:
+        from backend.llm.router import LLMRouter
+        
+        # Sample first 5000 chars to avoid token limits
+        sample = blog_markdown[:5000]
+        
+        prompt = f"""Extract ALL specific product names (brand + model) mentioned in this blog content.
+
+BLOG CONTENT:
+\"\"\"
+{sample}
+\"\"\"
+
+RULES:
+- Only include specific products with brand AND model number/name
+- Examples: "ASUS ROG Crosshair X870E Hero", "MSI MAG X870E Tomahawk WiFi", "Acer Aspire 5"
+- Do NOT include generic terms like "laptop", "motherboard", "CPU"
+- Do NOT include brand names alone (e.g., "ASUS" without model)
+- Return ONLY a JSON array of product names
+
+Output format: ["Product 1", "Product 2", "Product 3"]"""
+
+        router = LLMRouter()
+        response = await router.generate_text(
+            prompt=prompt,
+            system_prompt="You are a product extraction expert. Return only valid JSON.",
+            task_type="competitor_analysis",
+        )
+        
+        # Parse JSON
+        import json
+        import re
+        
+        # Extract JSON array
+        json_match = re.search(r'\[.*?\]', response, re.DOTALL)
+        if json_match:
+            products = json.loads(json_match.group(0))
+            products = [p.strip() for p in products if isinstance(p, str) and len(p) > 5]
+            logger.info(f"LLM extracted {len(products)} products")
+            return products
+        
+        return []
+        
+    except Exception as e:
+        logger.warning(f"LLM product extraction failed: {e}")
+        return []
+
+
+def _extract_products_with_regex(blog_markdown: str) -> List[str]:
+    """Fallback: Extract products using regex patterns."""
+    products = []
+    seen = set()
+    
+    # Scan first 5000 chars
+    sample = blog_markdown[:5000]
+    
+    for match in PRODUCT_PATTERN.finditer(sample):
+        product = match.group(1).strip()
+        key = product.lower()
+        if key not in seen and len(product) > 5 and product.lower() not in RETAILERS:
+            seen.add(key)
+            products.append(product)
+    
+    return products[:10]  # Limit to top 10
+
+
+def _find_product_section(
+    product_name: str,
+    h3_headings: List[Dict],
+    all_headings: List[Dict],
+    blog_markdown: str
+) -> Optional[Dict]:
+    """Find the best H3 section for a given product."""
+    product_lower = product_name.lower()
+    
+    # Score each H3 section by how much it mentions the product
+    best_score = 0
+    best_section = None
     
     for heading in h3_headings:
         # Skip generic headings
         if _is_generic_heading(heading["title"]):
             continue
         
-        # Extract product name
-        product_name = _extract_product_name(heading["title"])
-        if not product_name:
-            continue
-        
-        # Skip retailers
-        if product_name.lower() in RETAILERS:
-            continue
-        
-        # Determine section content boundaries
+        # Get section content
         content_start = heading["end"]
-        next_headings = [h for h in headings if h["start"] > content_start]
+        next_headings = [h for h in all_headings if h["start"] > content_start]
         if next_headings:
             content_end = min(h["start"] for h in next_headings)
         else:
@@ -136,29 +238,39 @@ def detect_product_sections(blog_markdown: str) -> List[Dict]:
         
         section_content = blog_markdown[content_start:content_end].strip()
         
-        product_sections.append({
-            "heading": heading["title"],
-            "product_name": product_name,
-            "content": section_content,
-            "start": heading["start"],
-            "end": content_end,
-            "word_count": len(section_content.split()),
-        })
-    
-    # Deduplicate by full product_name (keep first occurrence)
-    seen = set()
-    unique_sections = []
-    for section in product_sections:
-        key = section["product_name"].lower().strip()
-        # Skip if too short (probably just a brand name)
-        if len(key) < 5:
+        if len(section_content) < 50:
             continue
-        if key not in seen:
-            seen.add(key)
-            unique_sections.append(section)
+        
+        # Score: count how many times product appears in section
+        content_lower = section_content.lower()
+        mentions = content_lower.count(product_lower)
+        
+        # Bonus if product name is in heading
+        if product_lower in heading["title"].lower():
+            mentions += 5
+        
+        # Bonus for longer sections (more likely to be dedicated review)
+        word_count = len(section_content.split())
+        if word_count > 200:
+            mentions += 2
+        
+        if mentions > best_score:
+            best_score = mentions
+            best_section = {
+                "heading": heading["title"],
+                "product_name": product_name,
+                "content": section_content,
+                "start": heading["start"],
+                "end": content_end,
+                "word_count": word_count,
+                "mention_score": mentions,
+            }
     
-    logger.info("Detected %d product sections in blog", len(unique_sections))
-    return unique_sections
+    # Only return if product is mentioned at least once
+    if best_section and best_score >= 1:
+        return best_section
+    
+    return None
 
 
 async def enhance_detection_with_llm(blog_markdown: str, detected_products: List[str]) -> List[str]:

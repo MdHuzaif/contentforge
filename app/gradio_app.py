@@ -118,8 +118,9 @@ async def generate_prompts_action(thread_id: str):
     if not thread_id or not thread_id.strip():
         logger.warning("Empty thread_id received")
         return (
-            pd.DataFrame({"Section": [], "Title": [], "Word Target": [], "Status": []}),
+            pd.DataFrame({"Section": [], "Title": [], "Type": [], "Word Target": [], "Status": []}),
             "*Please run research first*",
+            gr.update(interactive=False),
             gr.update(interactive=False),
         )
     
@@ -131,8 +132,9 @@ async def generate_prompts_action(thread_id: str):
         if not state["values"]:
             logger.error(f"No state found for thread {thread_id} in SQLite")
             return (
-                pd.DataFrame({"Section": [], "Title": [], "Word Target": [], "Status": []}),
+                pd.DataFrame({"Section": [], "Title": [], "Type": [], "Word Target": [], "Status": []}),
                 "*❌ Session expired or state lost. Please run research again.*",
+                gr.update(interactive=False),
                 gr.update(interactive=False),
             )
         
@@ -143,41 +145,47 @@ async def generate_prompts_action(thread_id: str):
         
         if not sub_prompts:
             return (
-                pd.DataFrame({"Section": [], "Title": [], "Word Target": [], "Status": []}),
+                pd.DataFrame({"Section": [], "Title": [], "Type": [], "Word Target": [], "Status": []}),
                 "*No sub-prompts generated*",
+                gr.update(interactive=False),
                 gr.update(interactive=False),
             )
         
         prompt_df = pd.DataFrame([
             {
                 "Section": i + 1,
-                "Title": p.get("title", f"Section {i+1}"),
+                "Title": ("  ↳ " + p.get("title", "")) if p.get("is_split") and p.get("split_type") == "h3_detail" 
+                         else p.get("title", f"Section {i+1}"),
+                "Type": p.get("split_type", "H2") if p.get("is_split") else "H2",
                 "Word Target": p.get("word_target", 600),
                 "Status": "⏳ Pending",
             }
             for i, p in enumerate(sub_prompts)
         ])
         
-        summary = f"✅ Generated **{total} sub-prompts**. Click 'Execute Next Section' to start writing."
+        summary = f"✅ Generated **{total} sub-prompts** (with auto-splitting). Click 'Execute Next Section' or 'Generate Full Blog'."
         logger.info(f"Phase 2 complete: {total} sub-prompts for thread {thread_id}")
         
         return (
             prompt_df,
             summary,
             gr.update(interactive=True, value=f"▶️ Execute Next Section (1/{total})"),
+            gr.update(interactive=True),
         )
     except ValueError as e:
         logger.error(f"ValueError in generate_prompts: {e}")
         return (
-            pd.DataFrame({"Section": [], "Title": [], "Word Target": [], "Status": []}),
+            pd.DataFrame({"Section": [], "Title": [], "Type": [], "Word Target": [], "Status": []}),
             f"❌ {str(e)}. Please run research again.",
+            gr.update(interactive=False),
             gr.update(interactive=False),
         )
     except Exception as e:
         logger.error(f"Prompt generation failed: {e}", exc_info=True)
         return (
-            pd.DataFrame({"Section": [], "Title": [], "Word Target": [], "Status": []}),
+            pd.DataFrame({"Section": [], "Title": [], "Type": [], "Word Target": [], "Status": []}),
             f"❌ Error: {str(e)}",
+            gr.update(interactive=False),
             gr.update(interactive=False),
         )
 
@@ -204,14 +212,18 @@ async def execute_next_section_action(thread_id: str, current_button_text: str):
         
         # Update DataFrame to show completed sections
         sub_prompts_result = await session.get_state(thread_id)
-        sub_prompts = sub_prompts_result["values"].get("sub_prompts", [])
+        snap_values = sub_prompts_result.get("values", {})
+        sub_prompts = snap_values.get("sub_prompts", [])
+        last_error = snap_values.get("last_error", "")
         
         prompt_df = pd.DataFrame([
             {
                 "Section": i + 1,
-                "Title": p.get("title", f"Section {i+1}"),
+                "Title": ("  ↳ " + p.get("title", "")) if p.get("is_split") and p.get("split_type") == "h3_detail" 
+                         else p.get("title", f"Section {i+1}"),
+                "Type": p.get("split_type", "H2") if p.get("is_split") else "H2",
                 "Word Target": p.get("word_target", 600),
-                "Status": "✅ Complete" if i < current_idx else "⏳ Pending",
+                "Status": "⚠️ RETRY" if (last_error and i == current_idx) else ("✅ Complete" if i < current_idx else "⏳ Pending"),
             }
             for i, p in enumerate(sub_prompts)
         ])
@@ -219,12 +231,17 @@ async def execute_next_section_action(thread_id: str, current_button_text: str):
         # Build blog preview (append sections as they're generated)
         blog_preview_parts = [f"# Blog Preview ({current_idx}/{total} sections complete)\n"]
         for section in generated:
-            blog_preview_parts.append(section.get("content", ""))
-            blog_preview_parts.append("\n\n---\n\n")
+            if section.get("content"):
+                blog_preview_parts.append(section.get("content", ""))
+                blog_preview_parts.append("\n\n---\n\n")
         blog_preview = "".join(blog_preview_parts)
         
         # Update button text
-        if current_idx >= total:
+        if last_error:
+            button_text = f"▶️ Retry Section ({current_idx + 1}/{total})"
+            button_disabled = False
+            summary = f"⚠️ **{last_error}**\n\nClick 'Retry Section' to try again."
+        elif current_idx >= total:
             button_text = "✅ All Sections Complete"
             button_disabled = True
             summary = f"🎉 All **{total} sections** complete! Switch to 'Final Blog' tab and click 'Assemble Final Blog'."
@@ -249,6 +266,73 @@ async def execute_next_section_action(thread_id: str, current_button_text: str):
             gr.update(interactive=False),
             None,
         )
+
+
+async def auto_generate_full_blog(thread_id: str):
+    """Auto-execute ALL remaining sections in a loop."""
+    if not thread_id:
+        yield "❌ No active session.", gr.update()
+        return
+    
+    try:
+        session = await get_session()
+        
+        max_iterations = 25  # Safety limit
+        iteration = 0
+        
+        while iteration < max_iterations:
+            iteration += 1
+            
+            snap = await session.get_state(thread_id)
+            if not snap or not snap.get("values"):
+                break
+            
+            values = snap["values"]
+            current_idx = values.get("current_section_index", 0)
+            total = values.get("total_sections", 0)
+            sub_prompts = values.get("sub_prompts", [])
+            
+            # All sections done
+            if current_idx >= total:
+                break
+            
+            current_title = sub_prompts[current_idx].get("title", f"Section {current_idx+1}") if current_idx < len(sub_prompts) else f"Section {current_idx+1}"
+            
+            progress_msg = f"⏳ **Auto-Generating {current_idx + 1}/{total}:** {current_title}...\n\n*Please wait — sections generate sequentially.*"
+            yield progress_msg, gr.update(interactive=False)
+            
+            # Execute ONE section by resuming the graph
+            try:
+                # This triggers the section_writer node to run once
+                await session.graph.ainvoke(
+                    None,
+                    config={"configurable": {"thread_id": thread_id}}
+                )
+            except Exception as e:
+                err_str = str(e)
+                if "GraphFinished" in err_str or "reached end" in err_str.lower():
+                    break
+                logger.error(f"Auto-gen error at section {current_idx}: {e}")
+                yield f"⚠️ Error at section {current_idx+1}: {err_str}", gr.update(interactive=True)
+                return
+            
+            await asyncio.sleep(0.5)
+        
+        # Final message
+        final_snap = await session.get_state(thread_id)
+        final_idx = final_snap["values"].get("current_section_index", 0) if final_snap else 0
+        final_total = final_snap["values"].get("total_sections", 0) if final_snap else 0
+        
+        if final_idx >= final_total:
+            final_msg = f"✅ **All {final_total} sections generated successfully!**\n\n🎉 Click **'Assemble Blog'** to finish."
+        else:
+            final_msg = f"⚠️ Stopped at section {final_idx+1}/{final_total}. Use manual button to continue."
+        
+        yield final_msg, gr.update(interactive=True)
+        
+    except Exception as e:
+        logger.error(f"Auto-generation failed: {e}")
+        yield f"❌ Error: {str(e)}", gr.update(interactive=True)
 
 
 async def _get_blog_and_slug(thread_id: str):
@@ -345,34 +429,38 @@ async def assemble_blog_action(thread_id: str):
 
 
 async def detect_products_action(thread_id: str):
-    """Detect product H3 sections in the assembled blog. Returns: report, table, sections, dropdown, detail."""
-    empty_result = ("❌ No assembled blog found. Please assemble the blog first.",
-                   [], [], gr.update(choices=[], value=None), "*Run detection first.*")
-    
+    """Detect product H3 sections in the assembled blog."""
     if not thread_id:
-        return ("❌ No active session.", [], [],
-               gr.update(choices=[], value=None), "*Run detection first.*")
+        return "❌ No active session.", [], [], gr.update(choices=[], value=None), "*Run detection first.*"
     
     try:
         session = await get_session()
         snap = await session.get_state(thread_id)
         
         if not snap or not snap.get("values"):
-            return ("❌ Session state not found.", [], [],
-                   gr.update(choices=[], value=None), "*Run detection first.*")
+            return "❌ Session state not found.", [], [], gr.update(choices=[], value=None), "*Run detection first.*"
         
         blog_md = snap["values"].get("assembled_blog", "")
         if not blog_md:
-            return empty_result
+            return "❌ No assembled blog found.", [], [], gr.update(choices=[], value=None), "*Run detection first.*"
         
-        sections = detect_product_sections(blog_md)
+        # Use LLM-assisted detection
+        sections = await detect_product_sections(blog_md, use_llm=True)
         report = format_detection_report(sections)
         
-        # Build table data with preview column
+        # Build table data
         table_data = []
         for i, s in enumerate(sections, 1):
             preview = s["content"][:80].replace("\n", " ").replace("|", "/").strip() + "..."
-            table_data.append([i, s["product_name"], s["heading"], s["word_count"], preview])
+            score = s.get("mention_score", 0)
+            table_data.append([
+                i, 
+                s["product_name"], 
+                s["heading"], 
+                s["word_count"], 
+                preview,
+                f"Score: {score}"
+            ])
         
         # Product names for dropdown
         product_names = [s["product_name"] for s in sections]
@@ -381,15 +469,14 @@ async def detect_products_action(thread_id: str):
             value=product_names[0] if product_names else None
         )
         
-        # Show first section detail by default
+        # Show first section detail
         first_detail = get_section_detail(sections[0]) if sections else "*No products detected.*"
         
         return report, table_data, sections, dropdown_update, first_detail
         
     except Exception as e:
         logger.error(f"Product detection failed: {e}")
-        return (f"❌ Detection failed: {str(e)}", [], [],
-               gr.update(choices=[], value=None), "*Detection failed.*")
+        return f"❌ Detection failed: {str(e)}", [], [], gr.update(choices=[], value=None), "*Detection failed.*"
 
 
 def show_section_detail_action(product_name: str, sections: list):
@@ -427,7 +514,19 @@ async def refine_products_action(thread_id: str):
         result = await refine_blog_products(blog_md, topic)
         report = format_refinement_report(result)
         
-        logger.info(f"Refinement complete: {result['sections_refined']}/{result['total_products']} sections refined")
+        # CRITICAL: Save refined blog to session state
+        try:
+            await session.update_state(
+                thread_id,
+                values={
+                    "refined_blog": result["refined_blog"],
+                    "refinement_report": report,
+                    "refinement_stats": result.get("stats", []),
+                }
+            )
+            logger.info("Refined blog saved to session state")
+        except Exception as e:
+            logger.warning(f"Could not save refined state: {e}")
         
         return report, result["refined_blog"], blog_md
         
@@ -459,13 +558,18 @@ async def export_refined_to_uniscolian_action(thread_id: str):
         if isinstance(kw_data, dict):
             keywords = [k.get("keyword", "") for k in kw_data.get("keywords", []) if isinstance(k, dict)][:5]
         
-        # Call exporter in thread to not block async loop
+        import asyncio
+        from core.exporters.static_exporter import export_post_to_uniscolian
+        
+        # Add suffix to topic to differentiate from original
+        refined_topic = f"{topic} (Refined)" if topic else "Refined Blog"
+        
         result = await asyncio.to_thread(
             export_post_to_uniscolian,
             markdown=refined_md,
-            topic=topic,
+            topic=refined_topic,
             keywords=keywords,
-            generate_image=True,
+            generate_image=False,  # Don't regenerate image for refined version
             add_related=True,
             update_sitemap=True,
             avoid_duplicates=True,
@@ -650,22 +754,35 @@ def create_ui():
                 gr.Markdown("### Phase 2 & 3: Interactive Section Generation")
                 
                 prompt_df = gr.DataFrame(
-                    headers=["Section", "Title", "Word Target", "Status"],
-                    datatype=["str", "str", "str", "str"],
+                    headers=["Section", "Title", "Type", "Word Target", "Status"],
+                    datatype=["str", "str", "str", "str", "str"],
                     row_count=(0, "dynamic"),
-                    col_count=(4, "fixed"),
-                    label="Sub-Prompts Table",
+                    col_count=(5, "fixed"),
+                    label="Sub-Prompts (Auto-Split for Large Sections)",
+                    interactive=False,
                 )
                 
                 prompt_summary = gr.Markdown("*Generate prompts first*")
                 
                 with gr.Row():
+                    # Keep existing manual button (as fallback)
                     execute_btn = gr.Button(
-                        "▶️ Execute Next Section",
-                        variant="primary",
+                        "▶️ Execute Next Section (Manual)",
+                        variant="secondary",
                         interactive=False,
-                        scale=2,
+                        scale=1,
                     )
+                    
+                    # NEW: Auto-generate button
+                    auto_generate_btn = gr.Button(
+                        "🚀 Generate Full Blog (Auto)",
+                        variant="primary",
+                        size="lg",
+                        interactive=False,
+                        scale=1,
+                    )
+                
+                progress_md = gr.Markdown("")
                 
                 gr.Markdown("#### Blog Preview (Real-time)")
                 blog_preview_md = gr.Markdown("*Blog will appear here as sections are generated*")
@@ -709,7 +826,7 @@ def create_ui():
                 detection_report_md = gr.Markdown("*Click 'Detect Product Sections' after assembling your blog.*")
                 
                 detection_table = gr.Dataframe(
-                    headers=["#", "Product Name", "H3 Heading", "Words", "Section Preview"],
+                    headers=["#", "Product Name", "H3 Heading", "Words", "Preview", "Relevance"],
                     label="Detected Product Sections",
                     interactive=False,
                 )
@@ -817,11 +934,17 @@ def create_ui():
         ).then(
             fn=generate_prompts_action,
             inputs=[thread_id_state],
-            outputs=[prompt_df, prompt_summary, execute_btn],
+            outputs=[prompt_df, prompt_summary, execute_btn, auto_generate_btn],
         ).then(
             fn=enable_prompts_btn,
             inputs=None,
             outputs=[generate_prompts_btn],
+        )
+
+        auto_generate_btn.click(
+            fn=auto_generate_full_blog,
+            inputs=[thread_id_state],
+            outputs=[progress_md, auto_generate_btn],
         )
         
         def disable_execute_btn():

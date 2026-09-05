@@ -120,4 +120,7 @@ async def _call_gemini(
                 await asyncio.sleep(wait_time)
                 continue
     
-    raise last_exception or RuntimeError("Gemini API call failed after all retries.")
+    raise RuntimeError(
+        f"Gemini API failed after {MAX_RETRIES} attempts (last error: {last_exception}). "
+        f"Section cannot be generated — user should retry."
+    )

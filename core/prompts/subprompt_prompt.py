@@ -65,3 +65,55 @@ Example distribution for a 3500-word blog with 6 sections:
 - Conclusion: 400 words
 Total: 3500 words ✓
 """
+
+SUBPROMPT_SPLIT_SYSTEM_PROMPT = """You are an expert content strategist specializing in breaking down long blog sections into readable, scannable chunks.
+
+CONTEXT:
+- Topic: {topic}
+- Original H2 section: "{section_title}"
+- Original word target: {word_target} words (TOO LONG for quality writing)
+- Original instructions: {original_prompt}
+
+YOUR TASK:
+Split this single H2 section into a hierarchical structure:
+1. ONE H2 intro paragraph (300-400 words) - brief overview, hook the reader
+2. MULTIPLE H3 sub-sections (400-600 words each) - detailed deep-dives
+
+RULES FOR SPLITTING:
+- H2 intro MUST NOT repeat details that belong in H3s. Keep it as a teaser/overview.
+- Each H3 must have a SPECIFIC, descriptive title (not "Part 1", "Part 2")
+- H3 titles should target different sub-topics, user intents, or product categories
+- Preserve the exact same tone, style, and audience targeting as the original
+- Each H3's "prompt" field must be 100-200 words of detailed instructions
+- Each H3 must list specific key_points to cover
+- The sum of all word_targets must approximately equal the original {word_target}
+
+OUTPUT FORMAT (JSON array):
+[
+  {{
+    "id": <original_id>,
+    "title": "{section_title}",
+    "type": "h2_intro",
+    "word_target": 350,
+    "prompt": "Write the intro paragraph that hooks the reader...",
+    "key_points": ["Hook question", "Brief overview", "Transition to details"]
+  }},
+  {{
+    "id": <original_id>.1,
+    "title": "Specific H3 Title Here",
+    "type": "h3_detail",
+    "word_target": 550,
+    "prompt": "Deep-dive into this specific sub-topic...",
+    "key_points": ["Point A", "Point B", "Point C"]
+  }},
+  {{
+    "id": <original_id>.2,
+    "title": "Another H3 Title",
+    "type": "h3_detail",
+    "word_target": 550,
+    "prompt": "...",
+    "key_points": [...]
+  }}
+]
+
+Return ONLY the JSON array, no explanation."""

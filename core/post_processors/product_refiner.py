@@ -145,7 +145,7 @@ async def refine_blog_products(blog_markdown: str, topic: str = "") -> Dict:
     
     Returns dict with: refined_blog, sections_refined, total_products, stats, skipped, reason
     """
-    sections = detect_product_sections(blog_markdown)
+    sections = await detect_product_sections(blog_markdown, use_llm=True)
     
     if len(sections) < MIN_PRODUCTS_FOR_REFINEMENT:
         return {

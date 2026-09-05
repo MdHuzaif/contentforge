@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.config import logger
 from backend.llm.router import FALLBACK_MESSAGE, LLMRouter
-from core.prompts.subprompt_prompt import SUBPROMPT_GENERATION_SYSTEM_PROMPT
+from core.prompts.subprompt_prompt import SUBPROMPT_GENERATION_SYSTEM_PROMPT, SUBPROMPT_SPLIT_SYSTEM_PROMPT
 from core.prompts.section_prompt import SECTION_WRITING_SYSTEM_PROMPT
 from core.prompts.context_prompt import CONTEXT_SUMMARIZATION_SYSTEM_PROMPT
 from core.prompts.blog_intro_prompt import BLOG_INTRO_SYSTEM_PROMPT
@@ -346,7 +346,70 @@ Each section should have approximately {content_structure.get('avg_h3_per_sectio
         for prompt in sub_prompts:
             prompt["status"] = "pending"
         
-        logger.info(f"Generated {len(sub_prompts)} sub-prompts following optimal structure")
+        # === AUTO-SPLIT LARGE SECTIONS (>1000 words) ===
+        MAX_SECTION_WORDS = 1000
+        final_prompts = []
+
+        for prompt in sub_prompts:
+            word_target = prompt.get("word_target", 600)
+            
+            if word_target <= MAX_SECTION_WORDS:
+                # Small enough, keep as-is
+                final_prompts.append(prompt)
+            else:
+                # LARGE section - split via LLM
+                logger.info(f"Auto-splitting '{prompt.get('title')}' ({word_target} words) into H2+H3s")
+                
+                try:
+                    split_prompt_text = SUBPROMPT_SPLIT_SYSTEM_PROMPT.format(
+                        topic=state.get("topic", "general topic"),
+                        section_title=prompt.get("title", "Section"),
+                        word_target=word_target,
+                        original_prompt=prompt.get("prompt", "Detailed section"),
+                    )
+                    
+                    router = LLMRouter()
+                    split_response = await router.generate_text(
+                        prompt=split_prompt_text,
+                        system_prompt="You are an expert content strategist. Return only valid JSON.",
+                        task_type="subprompt_generation",
+                    )
+                    
+                    # Parse JSON
+                    if "```json" in split_response:
+                        split_response = split_response.split("```json")[1].split("```")[0]
+                    elif "```" in split_response:
+                        split_response = split_response.split("```")[1].split("```")[0]
+                    
+                    split_data = json.loads(split_response.strip())
+                    
+                    if isinstance(split_data, list) and len(split_data) >= 2:
+                        # Successfully split - add all sub-parts
+                        for i, split_item in enumerate(split_data):
+                            split_item["original_id"] = prompt.get("id")
+                            split_item["is_split"] = True
+                            split_item["split_type"] = split_item.get("type", "h3_detail")
+                            split_item["status"] = "pending"
+                            final_prompts.append(split_item)
+                        logger.info(f"  ✓ Split into {len(split_data)} parts")
+                    else:
+                        logger.warning(f"  ✗ Split returned invalid data, keeping original")
+                        final_prompts.append(prompt)
+                        
+                except Exception as e:
+                    logger.warning(f"  ✗ Split failed for '{prompt.get('title')}': {e}")
+                    final_prompts.append(prompt)
+
+        # Renumber all prompts sequentially
+        for i, p in enumerate(final_prompts):
+            p["id"] = i
+            if "status" not in p:
+                p["status"] = "pending"
+
+        # Replace original sub_prompts with split version
+        sub_prompts = final_prompts
+
+        logger.info(f"Final prompt count: {len(sub_prompts)} (after splitting)")
         
         return {
             "sub_prompts": sub_prompts,
@@ -494,9 +557,43 @@ Write Section {current_idx + 1} following the instructions above. Remember to:
             task_type="section_writing",
         )
         
-        # Count words (rough estimate)
+        # === POST-PROCESSING: Clean heading numbers ===
+        from core.post_processors.heading_cleaner import clean_section_content
+        cleaned_content = clean_section_content(section_content)
+
+        if cleaned_content != section_content:
+            logger.info(f"Section {current_idx + 1}: Cleaned heading number prefixes")
+            section_content = cleaned_content
+        
+        # === MINIMUM QUALITY GATE ===
+        MIN_SECTION_WORDS = 100
         word_count = len(section_content.split())
-        logger.info(f"Section {current_idx + 1} generated: {word_count} words")
+        
+        if word_count < MIN_SECTION_WORDS:
+            logger.warning(
+                f"⚠️ Section {current_idx + 1}/{total} FAILED: only {word_count} words generated "
+                f"(minimum required: {MIN_SECTION_WORDS}). HOLDING at this section for retry."
+            )
+            generated_sections = state.get("generated_sections", [])
+            if len(generated_sections) > current_idx:
+                generated_sections[current_idx]["content"] = ""
+            else:
+                generated_sections.append({
+                    "id": current_idx,
+                    "title": current_prompt.get("title", f"Section {current_idx + 1}"),
+                    "content": "",
+                    "word_count": 0,
+                    "timestamp": datetime.now().isoformat(),
+                    "status": "failed",
+                })
+            return {
+                **state,
+                "current_section_index": current_idx,  # HOLD - don't advance
+                "generated_sections": generated_sections,
+                "last_error": f"Section {current_idx + 1} generated only {word_count} words (min {MIN_SECTION_WORDS}). Click Execute again to retry.",
+            }
+
+        logger.info(f"Section {current_idx + 1} generated: {word_count} words ✓")
         
         # Now summarize this section for future context
         logger.info(f"Summarizing section {current_idx + 1} for context")
@@ -508,14 +605,31 @@ Write Section {current_idx + 1} following the instructions above. Remember to:
         
         # Update state
         generated_sections = state.get("generated_sections", [])
-        generated_sections.append({
-            "id": current_idx,
-            "title": current_prompt.get("title", f"Section {current_idx + 1}"),
-            "content": section_content,
-            "word_count": word_count,
-            "timestamp": datetime.now().isoformat(),
-            "status": "completed",
-        })
+        
+        if len(generated_sections) > current_idx:
+            generated_sections[current_idx] = {
+                "id": current_idx,
+                "title": current_prompt.get("title", f"Section {current_idx + 1}"),
+                "content": section_content,
+                "word_count": word_count,
+                "timestamp": datetime.now().isoformat(),
+                "status": "completed",
+            }
+        else:
+            generated_sections.append({
+                "id": current_idx,
+                "title": current_prompt.get("title", f"Section {current_idx + 1}"),
+                "content": section_content,
+                "word_count": word_count,
+                "timestamp": datetime.now().isoformat(),
+                "status": "completed",
+            })
+        
+        # Rate limit protection: wait before next section
+        if current_idx < total - 1:
+            logger.info(f"Section {current_idx + 1} complete. Waiting 5s to avoid API rate limits...")
+            import asyncio
+            await asyncio.sleep(5)
         
         new_contexts = section_contexts + [context_summary]
         next_idx = current_idx + 1
@@ -533,55 +647,17 @@ Write Section {current_idx + 1} following the instructions above. Remember to:
             "generated_sections": generated_sections,
             "section_contexts": new_contexts,
             "current_phase": new_phase,
+            "last_error": "",  # Clear error on success
             "operations_count": state.get("operations_count", 0) + 2,  # 2 LLM calls
         }
         
     except Exception as e:
         logger.error(f"Section {current_idx + 1} generation failed: {e}")
-        
-        # Fallback: generate placeholder content
-        fallback_content = f"""## {current_prompt.get('title', f'Section {current_idx + 1}')}
-
-This is placeholder content for section {current_idx + 1} of {total}.
-
-### Key Points:
-{chr(10).join(['- ' + point for point in current_prompt.get('key_points', ['Point 1', 'Point 2'])])}
-
-### Main Content:
-The actual content generation encountered an issue. This placeholder ensures the blog structure remains intact.
-
-*Detailed content would cover: {current_prompt.get('prompt', 'Section topic')}*
-
-### Summary:
-This section would normally provide comprehensive coverage of the topic with examples, statistics, and actionable insights.
-"""
-        
-        fallback_summary = f"Section {current_idx + 1} covered {current_prompt.get('title', 'topic')} with placeholder content due to generation error."
-        
-        generated_sections = state.get("generated_sections", [])
-        generated_sections.append({
-            "id": current_idx,
-            "title": current_prompt.get("title", f"Section {current_idx + 1}"),
-            "content": fallback_content,
-            "word_count": 150,
-            "timestamp": datetime.now().isoformat(),
-            "status": "failed",
-        })
-        
-        new_contexts = section_contexts + [fallback_summary]
-        next_idx = current_idx + 1
-        
-        if next_idx >= total:
-            new_phase = "assembly"
-        else:
-            new_phase = "execution"
-        
+        logger.warning(f"HOLDING at section {current_idx + 1} — click Execute to retry")
         return {
-            "current_section_index": next_idx,
-            "generated_sections": generated_sections,
-            "section_contexts": new_contexts,
-            "current_phase": new_phase,
-            "operations_count": state.get("operations_count", 0) + 1,
+            **state,
+            "current_section_index": current_idx,  # HOLD
+            "last_error": f"Section {current_idx + 1} failed: {e}. Click Execute again to retry.",
         }
 
 
@@ -646,7 +722,7 @@ Write an engaging introduction paragraph (150-250 words) that hooks the reader a
         content = section.get("content", "")
         
         # Add section header with H2
-        blog_parts.append(f"## {i}. {title}\n\n")
+        blog_parts.append(f"## {title}\n\n")
         
         # Add section content (ensure it doesn't have duplicate H2)
         if content.startswith("## "):
@@ -660,6 +736,11 @@ Write an engaging introduction paragraph (150-250 words) that hooks the reader a
     
     # Join everything
     assembled_blog = "".join(blog_parts)
+    
+    # === POST-PROCESSING: Clean ALL heading numbers in assembled blog ===
+    from core.post_processors.heading_cleaner import clean_heading_numbers
+    assembled_blog = clean_heading_numbers(assembled_blog)
+    logger.info("Blog assembler: All heading number prefixes cleaned")
     
     logger.info(f"Blog assembly complete: {len(assembled_blog)} characters")
     

@@ -42,6 +42,13 @@ Every single section you write MUST include ALL of the following elements to max
 4. CALLOUT BOX: Include at least one "Quick Tip", "Key Takeaway", or "Pro Tip" formatted as a Markdown blockquote. Example format:
 > **💡 Pro Tip:** [Insert highly actionable, specific advice here that the reader can use immediately.]
 
+HEADING FORMATTING RULES:
+- NEVER add number prefixes (1., 2., 3., etc.) to H3 headings
+- H3 headings should be clean product names or descriptive titles only
+- BAD: "### 1. The Standout All-Rounder"
+- GOOD: "### The Standout All-Rounder" or "### Acer Aspire 5 A515-58P"
+- If you need to show order, use it in the text content, not the heading
+
 OUTPUT FORMAT:
 Return ONLY the section content in Markdown format. Do NOT include:
 - Section title (the sub-prompt already has it)
