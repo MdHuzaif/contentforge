@@ -136,12 +136,16 @@ async def competitor_analysis_node(state: ContentForgeState) -> Dict[str, Any]:
 
     # --- NEW: Extract competitor content structures ---
     competitor_structures = []
-    for comp in competitors[:3]:  # Analyze top 3 competitors only
+    scraped_articles = []
+    
+    for comp in competitors[:5]:  # Analyze top 5 competitors (increased from 3)
         url = comp.get("url", "")
         try:
             # Extract headings from the competitor page
             headings = comp.get("headings", {})
             content = comp.get("content", "")
+            title = comp.get("title", "")
+            
             if not headings and content:
                 headings = extract_markdown_headings(content)  # Use existing helper
             if not headings:
@@ -156,6 +160,16 @@ async def competitor_analysis_node(state: ContentForgeState) -> Dict[str, Any]:
                 "h2_titles": headings.get("h2", [])[:10],  # First 10 H2s
                 "section_count": len(headings.get("h2", []))
             })
+            
+            # === NEW: Save raw content for Level 2 product extraction ===
+            if content and len(content) > 200:  # Only save if substantial content
+                scraped_articles.append({
+                    "url": url,
+                    "title": title or f"Competitor {len(scraped_articles) + 1}",
+                    "content": content[:8000],  # Limit to 8000 chars per article
+                    "h2_titles": headings.get("h2", [])[:10],
+                })
+            
             logger.info(f"Extracted structure from {url}: {len(headings.get('h2', []))} H2s")
         except Exception as e:
             logger.warning(f"Failed to extract structure from {url}: {e}")
@@ -313,6 +327,7 @@ Return ONLY valid JSON, no markdown, no explanation."""
             "metrics": metrics,
             "gap_analysis": analysis_text,
             "sources": sources,
+            "scraped_articles": scraped_articles,  # === NEW: Raw content for Level 2 ===
         },
         "content_structure": content_structure,  # NEW: Save structure to state
         "operations_count": state.get("operations_count", 0) + 1,
@@ -332,13 +347,72 @@ async def data_gathering_node(state: ContentForgeState) -> Dict[str, Any]:
     # Run competitor analysis
     comp_result = await competitor_analysis_node(temp_state)
     
-    # Merge results and update phase
-    return {
+    result = {
         **kw_result,
         **comp_result,
         "current_phase": "prompt_generation",
         "research_status": "completed",
     }
+    
+    # === LEVEL 1: Content Type Classification ===
+    logger.info("🎯 Running content type classification...")
+    from core.classifiers.content_type_classifier import classify_content_type
+    
+    try:
+        classification = await classify_content_type(
+            topic=state.get("topic", state.get("user_request", "")),
+            keywords=result.get("keyword_research", {}).get("keywords", []),
+            competitor_data=result.get("competitor_analysis", {}),
+        )
+        
+        # Update state with classification
+        result["content_type"] = classification["content_type"]
+        result["content_type_confidence"] = classification["confidence"]
+        result["content_type_reasoning"] = classification["reasoning"]
+        result["product_count_estimate"] = classification["product_count_estimate"]
+        
+    except Exception as e:
+        logger.warning(f"Content classification failed: {e}")
+        # Keep defaults from create_initial_state
+        
+    # === LEVEL 2: Universal Product Selection (only for product_recommendation) ===
+    if result.get("content_type") == "product_recommendation":
+        logger.info("🛒 Running universal product selection engine...")
+        from core.selectors.product_selector import extract_products_universal
+        
+        try:
+            target_count = result.get("product_count_estimate", 10)
+            topic = state.get("topic", state.get("user_request", ""))
+            competitor_data = result.get("competitor_analysis", {})
+            
+            extraction_result = await extract_products_universal(
+                topic=topic,
+                competitor_data=competitor_data,
+                target_count=target_count,
+            )
+            
+            products = extraction_result.get("products", [])
+            result["selected_products"] = products
+            result["product_category"] = extraction_result.get("category_detected", "unknown")
+            result["extraction_confidence"] = extraction_result.get("extraction_confidence", 0.0)
+            result["extraction_notes"] = extraction_result.get("extraction_notes", "")
+            
+            logger.info(f"✅ Selected {len(products)} authentic products")
+            for i, p in enumerate(products[:3], 1):
+                logger.info(f"   {i}. {p['name']} ({p['tier']})")
+            
+        except Exception as e:
+            logger.warning(f"Product selection failed: {e}")
+            result["selected_products"] = []
+            result["product_category"] = "unknown"
+            result["extraction_confidence"] = 0.0
+            result["extraction_notes"] = f"Selection failed: {e}"
+    else:
+        logger.info(f"ℹ️  Content type is '{result.get('content_type')}', skipping product selection")
+        result["selected_products"] = []
+        result["product_category"] = "not_applicable"
+        
+    return result
 
 
 async def subprompt_generator_node(state: ContentForgeState) -> Dict[str, Any]:
@@ -516,6 +590,7 @@ async def section_writer_node(state: ContentForgeState) -> Dict[str, Any]:
     sub_prompts = state.get("sub_prompts", [])
     section_contexts = state.get("section_contexts", [])
     topic = state.get("user_request", "General Topic")
+    detected_products = list(state.get("detected_products", []))
     
     if current_idx >= total:
         logger.warning("All sections already written, moving to assembly")
@@ -765,6 +840,17 @@ CRITICAL RANKING REQUIREMENTS:
                     if product_name:
                         logger.info(f"Section {current_idx + 1}: Product detected '{product_name}', auto-refining...")
                         
+                        # Track detected product for affiliate linking UI
+                        existing_names = {p["name"] for p in detected_products}
+                        if product_name not in existing_names:
+                            detected_products.append({
+                                "name": product_name,
+                                "section_index": current_idx,
+                                "heading": section_title,
+                                "detected_at": datetime.now().isoformat(),
+                            })
+                            logger.info(f"📦 Detected product for affiliate: '{product_name}'")
+                        
                         try:
                             signals = await gather_product_signals(product_name, section_topic)
                             
@@ -805,6 +891,33 @@ CRITICAL RANKING REQUIREMENTS:
                         except Exception as refine_err:
                             logger.warning(f"Section {current_idx + 1}: Auto-refinement failed (keeping original): {refine_err}")
                             
+                    # === ENHANCED DETECTION: Also check for products in markdown tables ===
+                    # This helps detect products mentioned in "At a Glance" comparison tables
+                    section_content = generated_sections[-1]["content"] if generated_sections else ""
+                    
+                    # Look for product names in table rows (pattern: | Product Name | ...)
+                    table_product_pattern = r'\|\s*([A-Z][A-Za-z0-9\s\-]+(?:ROG|AORUS|Strix|Tomahawk|Crosshair|TUF|Gaming|WiFi|MAX|Elite|Hero)[^\|]*)\s*\|'
+                    table_matches = re.findall(table_product_pattern, section_content)
+                    
+                    existing_names = {p["name"] for p in detected_products}
+                    for match in table_matches:
+                        # Clean up the product name
+                        detected_name = match.strip()
+                        
+                        # Skip if too short or already detected
+                        if len(detected_name) < 10 or detected_name in existing_names:
+                            continue
+                        
+                        # Add to detected products
+                        detected_products.append({
+                            "name": detected_name,
+                            "section_index": current_idx,
+                            "heading": section_title,
+                            "detected_at": datetime.now().isoformat(),
+                            "source": "table"
+                        })
+                        logger.info(f"📦 Detected product from table: '{detected_name}'")
+                            
         except ImportError as imp_err:
             logger.warning(f"Auto-refinement imports failed (skipping): {imp_err}")
         except Exception as e:
@@ -832,6 +945,7 @@ CRITICAL RANKING REQUIREMENTS:
             "generated_sections": generated_sections,
             "section_contexts": new_contexts,
             "current_phase": new_phase,
+            "detected_products": detected_products,
             "last_error": "",  # Clear error on success
             "operations_count": state.get("operations_count", 0) + 2,  # 2 LLM calls
         }

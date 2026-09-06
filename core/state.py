@@ -21,6 +21,18 @@ class ContentForgeState(TypedDict, total=False):
     content_structure: Dict[str, Any]      # NEW: Optimal content structure
     research_status: str                   # "pending" | "running" | "completed" | "failed"
     
+    # Content type classification (Level 1 - NEW)
+    content_type: str
+    content_type_confidence: float
+    content_type_reasoning: str
+    product_count_estimate: int
+    selected_products: List[Dict[str, Any]]  # Will be populated in Level 2
+    
+    # Level 2 - Universal Product Selection (NEW)
+    product_category: str              # Detected category (e.g., "laptop", "smartwatch")
+    extraction_confidence: float       # 0.0-1.0 confidence score
+    extraction_notes: str              # LLM notes about extraction quality
+    
     # === Phase 2: Sub-Prompt Generation ===
     sub_prompts: List[Dict[str, Any]]      # List of {id, title, prompt, word_target, status}
     total_sections: int                    # Total number of sections to generate
@@ -39,6 +51,8 @@ class ContentForgeState(TypedDict, total=False):
     refined_blog: str
     refinement_report: str
     refinement_stats: List[Dict[str, Any]]
+    product_affiliate_links: Dict[str, str]  # product_name → amazon_url
+    detected_products: List[Dict[str, Any]]   # [{name, section_index, heading}]
     
     # === Execution Config ===
     execution_mode: str                    # Always "interactive" in new architecture
@@ -67,6 +81,14 @@ def create_initial_state(
         "competitor_analysis": {},
         "content_structure": {},
         "research_status": "pending",
+        "content_type": "product_recommendation",
+        "content_type_confidence": 0.0,
+        "content_type_reasoning": "",
+        "product_count_estimate": 10,
+        "selected_products": [],
+        "product_category": "",
+        "extraction_confidence": 0.0,
+        "extraction_notes": "",
         
         # Phase 2
         "sub_prompts": [],
@@ -84,6 +106,8 @@ def create_initial_state(
         "refined_blog": "",
         "refinement_report": "",
         "refinement_stats": [],
+        "product_affiliate_links": {},
+        "detected_products": [],
         
         # Config
         "execution_mode": "interactive",

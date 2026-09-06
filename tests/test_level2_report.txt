@@ -1,0 +1,67 @@
+================================================================================
+📊 COMPREHENSIVE LEVEL 2 TEST REPORT
+================================================================================
+
+🕐 Test Duration: 72.81 seconds
+📝 Total Tests Run: 12
+
+================================================================================
+📈 TEST RESULTS BY CATEGORY
+================================================================================
+
+🔬 Real Scraped Content
+--------------------------------------------------------------------------------
+  Iterations: 3
+  Success Rate: 100.0%
+  Average Products: 10.0
+  Min/Max Products: 10 / 10
+  Average Duration: 5.93s
+    ✅ Iteration 1: 10 products (competitor_content) - 6.18s
+    ✅ Iteration 2: 10 products (competitor_content) - 5.69s
+    ✅ Iteration 3: 10 products (competitor_content) - 5.93s
+
+🔬 Structure Headings Only
+--------------------------------------------------------------------------------
+  Iterations: 3
+  Success Rate: 100.0%
+  Average Products: 10.0
+  Min/Max Products: 10 / 10
+  Average Duration: 4.65s
+    ✅ Iteration 1: 10 products (competitor_content) - 4.35s
+    ✅ Iteration 2: 10 products (competitor_content) - 4.48s
+    ✅ Iteration 3: 10 products (competitor_content) - 5.12s
+
+🔬 LLM Auto-Generation
+--------------------------------------------------------------------------------
+  Iterations: 3
+  Success Rate: 100.0%
+  Average Products: 9.3
+  Min/Max Products: 9 / 10
+  Average Duration: 6.20s
+    ✅ Iteration 1: 9 products (auto_generated) - 5.07s
+    ✅ Iteration 2: 9 products (auto_generated) - 6.65s
+    ✅ Iteration 3: 10 products (auto_generated) - 6.89s
+
+🔬 Mixed Categories
+--------------------------------------------------------------------------------
+  Iterations: 3
+  Success Rate: 100.0%
+  Average Products: 10.0
+  Min/Max Products: 10 / 10
+  Average Duration: 7.48s
+    ✅ Iteration 1: 10 products (competitor_content) - 4.89s
+    ✅ Iteration 2: 10 products (competitor_content) - 4.99s
+    ✅ Iteration 3: 10 products (hybrid) - 12.56s
+
+================================================================================
+🎯 OVERALL SUMMARY
+================================================================================
+
+  Total Tests: 12
+  Successful: 12
+  Failed: 0
+  Overall Success Rate: 100.0%
+
+  ✅ EXCELLENT: System is highly reliable (90%+ success)
+
+================================================================================

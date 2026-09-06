@@ -111,6 +111,52 @@ async def start_research_action(topic: str):
         )
 
 
+async def display_selected_products(thread_id: str):
+    """Display selected products in the UI after Phase 1."""
+    if not thread_id:
+        return "*No active session*", []
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return "*Session state not found*", []
+        
+        values = snap["values"]
+        products = values.get("selected_products", [])
+        category = values.get("product_category", "unknown")
+        confidence = values.get("extraction_confidence", 0.0)
+        notes = values.get("extraction_notes", "")
+        
+        if not products:
+            return "*No products selected yet. Content type may not be product_recommendation.*", []
+        
+        # Build summary markdown
+        lines = [
+            f"## 🛒 {len(products)} Products Selected for Detailed Review\n",
+            f"**Category:** `{category}` | **Confidence:** `{confidence:.0%}`\n",
+        ]
+        if notes:
+            lines.append(f"_{notes}_\n")
+        
+        # Build table data
+        table_rows = []
+        for i, p in enumerate(products, 1):
+            tier_display = {"premium": "💎 Premium", "mid_range": "⭐ Mid-Range", "budget": "💰 Budget"}.get(
+                p.get("tier", ""), p.get("tier", "")
+            )
+            popularity = p.get("popularity_score", 0)
+            why = (p.get("why_notable") or "")[:100]
+            
+            table_rows.append([i, p.get("name", ""), p.get("brand", ""), tier_display, popularity, why])
+        
+        return "\n".join(lines), table_rows
+        
+    except Exception as e:
+        return f"*Error displaying products: {e}*", []
+
+
 async def generate_prompts_action(thread_id: str):
     """Phase 2: Generate sub-prompts from research."""
     logger.info(f"Generate prompts called with thread_id: '{thread_id}'")
@@ -445,7 +491,7 @@ async def detect_products_action(thread_id: str):
             return "❌ No assembled blog found.", [], [], gr.update(choices=[], value=None), "*Run detection first.*"
         
         # Use LLM-assisted detection
-        sections = await detect_product_sections(blog_md, use_llm=True)
+        sections = detect_product_sections(blog_md)
         report = format_detection_report(sections)
         
         # Build table data
@@ -623,6 +669,92 @@ async def enhance_detection_action(thread_id: str, current_sections: list):
         return f"❌ Enhancement failed: {str(e)}", current_sections
 
 
+async def load_detected_products_action(thread_id: str):
+    """Load detected products from state into editable table."""
+    if not thread_id:
+        return [], "*❌ No active session.*"
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return [], "*❌ Session state not found.*"
+        
+        values = snap["values"]
+        detected = values.get("detected_products", [])
+        existing_links = values.get("product_affiliate_links", {})
+        
+        if not detected:
+            return [], "*⚠️ No products detected in this blog. Generate product review sections first.*"
+        
+        table_data = []
+        for p in detected:
+            name = p["name"]
+            section = p.get("heading", f"Section {p.get('section_index', '?')}")
+            link = existing_links.get(name, "")
+            table_data.append([name, section[:60] + "..." if len(section) > 60 else section, link])
+        
+        msg = f"✅ Loaded {len(detected)} detected products. Paste Amazon affiliate links (e.g., https://amazon.com/dp/B09JC1W613?tag=huzaif1612-20)"
+        return table_data, msg
+        
+    except Exception as e:
+        return [], f"*❌ Load failed: {str(e)}*"
+
+
+async def save_affiliate_links_action(thread_id: str, table_data: list):
+    """Save affiliate links back to state."""
+    if not thread_id:
+        return "*❌ No active session.*"
+    
+    # Convert DataFrame to list if needed (Gradio returns DataFrame)
+    if hasattr(table_data, 'values'):
+        # It's a DataFrame - convert to list of lists
+        table_data = table_data.values.tolist()
+    elif hasattr(table_data, 'empty'):
+        if table_data.empty:
+            return "*❌ No data to save.*"
+        table_data = table_data.values.tolist()
+    
+    if not table_data:
+        return "*❌ No data to save.*"
+    
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        
+        if not snap or not snap.get("values"):
+            return "*❌ Session state not found.*"
+        
+        # Build links dict from table
+        product_links = {}
+        for row in table_data:
+            if len(row) >= 3 and row[0] and row[2]:
+                product_name = row[0].strip()
+                amazon_url = row[2].strip()
+                if product_name and amazon_url:
+                    if "amazon." in amazon_url.lower():
+                        product_links[product_name] = amazon_url
+        
+        # Update state
+        await session.update_state(thread_id, {
+            "values": {
+                **snap["values"],
+                "product_affiliate_links": product_links,
+            }
+        })
+        
+        msg = f"✅ Saved {len(product_links)} affiliate link(s)!\n\n"
+        msg += "**Products with links:**\n"
+        for name, url in product_links.items():
+            msg += f"- {name}\n"
+        msg += "\n💡 Now click '🚀 Publish to Uniscolian' — buttons will appear automatically!"
+        return msg
+        
+    except Exception as e:
+        return f"*❌ Save failed: {str(e)}*"
+
+
 async def publish_to_uniscolian_action(thread_id: str):
     """One-click publish: Image + Links + Sitemap + HTML Export."""
     if not thread_id:
@@ -649,6 +781,19 @@ async def publish_to_uniscolian_action(thread_id: str):
         elif isinstance(kw_data, list):
             keywords = [k.get("keyword", "") for k in kw_data if isinstance(k, dict)][:5]
 
+        # Get affiliate links (if user configured any)
+        product_links = snap["values"].get("product_affiliate_links", {}) or {}
+        detected = snap["values"].get("detected_products", [])
+        
+        # Auto-detect top pick (first product or one labeled 'Best Overall')
+        top_pick = None
+        for p in detected:
+            if "best overall" in p.get("heading", "").lower() or p.get("section_index") == 2:
+                top_pick = p["name"]
+                break
+        if not top_pick and detected:
+            top_pick = detected[0]["name"]  # Fallback to first
+
         # Run the heavy export process in a background thread to avoid blocking UI
         result = await asyncio.to_thread(
             export_post_to_uniscolian,
@@ -658,7 +803,9 @@ async def publish_to_uniscolian_action(thread_id: str):
             generate_image=True,
             add_related=True,
             update_sitemap=True,
-            avoid_duplicates=True
+            avoid_duplicates=True,
+            product_affiliate_links=product_links,
+            top_pick_product=top_pick,
         )
         
         # Build rich success message
@@ -681,6 +828,13 @@ async def publish_to_uniscolian_action(thread_id: str):
             
         # Sitemap
         msg.append(f"🗺️ **Sitemap Updated:** {'Yes' if result.get('sitemap_updated') else 'No (already exists)'}")
+        
+        if product_links:
+            msg.append(f"\n💰 **Affiliate Buttons Added:** {len(product_links)} products")
+            for name in product_links.keys():
+                msg.append(f"  - {name}")
+        else:
+            msg.append("\n💡 *Tip: Configure affiliate links in the '💰 Affiliate Links' tab before publishing to earn commissions.*")
         
         msg.append("\n---\n")
         msg.append("**👉 Next Steps:**")
@@ -742,6 +896,21 @@ def create_ui():
                 
                 gr.Markdown("#### Gap Analysis")
                 gap_analysis_md = gr.Markdown("*Gap analysis will appear here*")
+                
+                # === LEVEL 2: Selected Products Display ===
+                gr.Markdown("---")
+                gr.Markdown("### 🛒 Selected Products (from Competitor Analysis)")
+                gr.Markdown("*These products will be reviewed in detail. Extracted from top competitor articles.*")
+                
+                selected_products_md = gr.Markdown("*Products will appear here after Phase 1 completes*")
+                
+                selected_products_table = gr.Dataframe(
+                    headers=["#", "Product Name", "Brand", "Tier", "Popularity", "Why Notable"],
+                    label="Selected Products for Detailed Review",
+                    interactive=False,
+                    datatype=["number", "str", "str", "str", "number", "str"],
+                    col_count=(6, "fixed"),
+                )
                 
                 generate_prompts_btn = gr.Button(
                     "📋 Generate Outline Prompts",
@@ -866,6 +1035,28 @@ def create_ui():
                 refined_blog_state = gr.State("")
                 original_blog_state = gr.State("")
 
+            # === NEW TAB: Affiliate Links Configuration ===
+            with gr.Tab("💰 Affiliate Links"):
+                gr.Markdown("### 💰 Amazon Affiliate Link Configuration")
+                gr.Markdown(
+                    "*Paste Amazon affiliate links for each detected product. "
+                    "Links are optional — products without links will export without buttons.*"
+                )
+                
+                detected_products_display = gr.Dataframe(
+                    headers=["Product Name", "Section", "Amazon Link (paste here)"],
+                    label="Detected Products — Add Affiliate Links",
+                    interactive=[False, False, True],  # Only link column is editable
+                    datatype=["str", "str", "str"],
+                    col_count=(3, "fixed"),
+                )
+                
+                with gr.Row():
+                    load_detected_btn = gr.Button("🔄 Load Detected Products", variant="secondary")
+                    save_links_btn = gr.Button("💾 Save Affiliate Links", variant="primary")
+                
+                affiliate_status_md = gr.Markdown("*Generate a blog first, then load detected products.*")
+
             # === NEW TAB: Blog Comparison & Export ===
             with gr.Tab("📝 Blog Comparison & Export"):
                 gr.Markdown("### 📝 Original vs Refined Blog")
@@ -916,6 +1107,10 @@ def create_ui():
                 thread_id_state,
             ],
         ).then(
+            fn=display_selected_products,
+            inputs=[thread_id_state],
+            outputs=[selected_products_md, selected_products_table],
+        ).then(
             fn=enable_research_btn,
             inputs=None,
             outputs=[research_btn],
@@ -965,6 +1160,10 @@ def create_ui():
             fn=assemble_blog_action,
             inputs=[thread_id_state],
             outputs=[final_blog_md, blog_stats, download_md_btn, download_pdf_btn, publish_uniscolian_btn, original_blog_display],
+        ).then(
+            fn=load_detected_products_action,
+            inputs=[thread_id_state],
+            outputs=[detected_products_display, affiliate_status_md],
         )
         download_md_btn.click(fn=download_markdown_action, inputs=[thread_id_state], outputs=[download_file])
         download_pdf_btn.click(fn=download_pdf_action, inputs=[thread_id_state], outputs=[download_file])
@@ -972,6 +1171,18 @@ def create_ui():
             fn=publish_to_uniscolian_action,
             inputs=[thread_id_state],
             outputs=[publish_status_md]
+        )
+
+        load_detected_btn.click(
+            fn=load_detected_products_action,
+            inputs=[thread_id_state],
+            outputs=[detected_products_display, affiliate_status_md],
+        )
+
+        save_links_btn.click(
+            fn=save_affiliate_links_action,
+            inputs=[thread_id_state, detected_products_display],
+            outputs=[affiliate_status_md],
         )
 
         # Product Detection wiring (5 outputs)

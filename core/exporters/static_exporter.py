@@ -37,7 +37,27 @@ def export_post_to_uniscolian(
     update_sitemap: bool = True,
     keywords: Optional[List[str]] = None,
     add_related: bool = True,
+    product_affiliate_links: Optional[Dict[str, str]] = None,
+    top_pick_product: Optional[str] = None,
+    **kwargs,
 ) -> Dict:
+    # === INJECT AFFILIATE BUTTONS (if links provided) ===
+    from core.exporters.affiliate_buttons import (
+        inject_buttons_into_markdown,
+        generate_disclosure_footer,
+    )
+
+    product_links = product_affiliate_links or kwargs.get("product_affiliate_links", {}) or {}
+    top_pick = top_pick_product or kwargs.get("top_pick_product", None)
+
+    if product_links:
+        logger.info(f"💰 Injecting affiliate buttons for {len(product_links)} products...")
+        markdown = inject_buttons_into_markdown(markdown, product_links, top_pick_product=top_pick)
+        
+        # Add disclosure footer
+        if "affiliate-disclosure" not in markdown:
+            markdown += "\n" + generate_disclosure_footer()
+
     now = datetime.now()
     uploads_ym = now.strftime("%Y/%m")
     base_slug = slugify_slug(topic)

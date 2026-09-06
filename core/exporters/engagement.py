@@ -26,6 +26,126 @@ ENGAGEMENT_BLOCK = """
 .entry-content .wp-block-table th,.entry-content .wp-block-table td{padding:8px 10px!important;font-size:14px}
 #cf-top{right:14px;bottom:14px;width:42px;height:42px}
 }
+
+/* Amazon Affiliate Button Styles */
+.affiliate-button-wrapper {
+    text-align: center;
+    margin: 2rem auto;
+    padding: 1.5rem;
+    background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+    border: 2px solid #FF9900;
+    border-radius: 12px;
+    max-width: 500px;
+    box-shadow: 0 4px 12px rgba(255, 153, 0, 0.15);
+    transition: all 0.3s ease;
+}
+
+.affiliate-button-wrapper:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(255, 153, 0, 0.25);
+}
+
+.affiliate-button-wrapper.best-deal {
+    background: linear-gradient(135deg, #fff8e1 0%, #ffffff 100%);
+    border-color: #FFD700;
+    position: relative;
+}
+
+.best-deal-badge {
+    position: absolute;
+    top: -12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+    color: #1a1a1a;
+    padding: 4px 16px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.amazon-affiliate-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: linear-gradient(135deg, #FF9900 0%, #FFB347 100%);
+    color: #1a1a1a !important;
+    text-decoration: none !important;
+    padding: 14px 28px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 1.05rem;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 6px rgba(255, 153, 0, 0.3);
+}
+
+.amazon-affiliate-btn:hover {
+    background: linear-gradient(135deg, #FFB347 0%, #FF9900 100%);
+    transform: scale(1.03);
+    box-shadow: 0 4px 12px rgba(255, 153, 0, 0.4);
+}
+
+.amazon-affiliate-btn.best-deal-btn {
+    background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+}
+
+.btn-icon { font-size: 1.3rem; }
+.btn-text { flex: 1; }
+.btn-arrow { font-size: 1.4rem; font-weight: 900; }
+
+.affiliate-disclosure-small {
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 10px;
+    font-style: italic;
+}
+
+/* Table button (compact) */
+.amazon-btn-table {
+    display: inline-block;
+    background: #FF9900;
+    color: #1a1a1a !important;
+    text-decoration: none !important;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 0.2s;
+}
+
+.amazon-btn-table:hover {
+    background: #FFB347;
+}
+
+/* Footer disclosure */
+.affiliate-disclosure-footer {
+    background: #f8f9fa;
+    border-left: 4px solid #FF9900;
+    padding: 1rem 1.25rem;
+    margin: 2rem 0;
+    font-size: 0.9rem;
+    color: #555;
+    border-radius: 4px;
+}
+
+.affiliate-disclosure-footer strong {
+    color: #333;
+}
+
+/* Mobile responsive */
+@media (max-width: 600px) {
+    .affiliate-button-wrapper {
+        padding: 1rem;
+        margin: 1rem 0.5rem;
+    }
+    .amazon-affiliate-btn {
+        padding: 12px 20px;
+        font-size: 0.95rem;
+    }
+    .btn-text { font-size: 0.9rem; }
+}
 </style>
 <div id="cf-progress"></div>
 <button id="cf-top" aria-label="Back to top">&#8593;</button>
