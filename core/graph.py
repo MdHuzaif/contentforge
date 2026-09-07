@@ -415,6 +415,366 @@ async def data_gathering_node(state: ContentForgeState) -> Dict[str, Any]:
     return result
 
 
+def _generate_product_subprompts(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate structured sub-prompts for product recommendation content.
+    
+    Creates:
+    - H2: Introduction
+    - H2: At a Glance comparison table
+    - H2: Detailed reviews intro
+    - H3: One detailed review per selected product
+    - H2: Buying guide
+    - H2: FAQ
+    - H2: Conclusion
+    """
+    selected_products = state.get("selected_products", [])
+    topic = state.get("topic", state.get("user_request", ""))
+    keywords_data = state.get("keyword_research", {}).get("keywords", [])
+    category = state.get("product_category", "product")
+    
+    # Extract top keywords
+    primary_kw = ""
+    secondary_kws = []
+    if keywords_data:
+        if isinstance(keywords_data[0], dict):
+            primary_kw = keywords_data[0].get("keyword", topic)
+            secondary_kws = [k.get("keyword", "") for k in keywords_data[1:9]]
+        else:
+            primary_kw = keywords_data[0] if keywords_data else topic
+            secondary_kws = keywords_data[1:9]
+    
+    secondary_kw_text = ", ".join(secondary_kws) if secondary_kws else "related terms"
+    product_count = len(selected_products)
+    
+    sub_prompts = []
+    
+    # === 1. H2: Introduction ===
+    sub_prompts.append({
+        "id": 0,
+        "title": f"Introduction: Your Guide to the Best {category.title()} Options in 2026",
+        "type": "h2_intro",
+        "word_target": 600,
+        "status": "pending",
+        "primary_keyword": primary_kw,
+        "secondary_keywords": secondary_kws,
+        "prompt": f"""Write a compelling 500-700 word introduction for an article about '{topic}'.
+
+STRUCTURE:
+1. HOOK (100 words): Start with a surprising statistic, common pain point, or 
+   provocative question about {category} shopping in 2026.
+2. CONTEXT (150 words): Explain why choosing the right {category} matters now — 
+   mention recent tech advances, market changes, or user needs.
+3. WHAT READERS WILL LEARN (150 words): Preview the {product_count} products reviewed, 
+   the testing methodology, and the tier breakdown (premium/mid-range/budget).
+4. CREDIBILITY (100 words): Briefly mention how products were selected (competitor 
+   analysis, real user signals, expert testing).
+5. TRANSITION (100 words): Tease the "At a Glance" table and detailed reviews below.
+
+SEO REQUIREMENTS:
+- Naturally weave in primary keyword: '{primary_kw}'
+- Include 2-3 secondary keywords: {secondary_kw_text}
+- Use conversational expert tone ("we tested", "in our experience")
+- End with a clear transition sentence
+
+DO NOT include any product names in detail here — save those for the reviews below.
+DO NOT include any buy buttons or pricing.""",
+        "key_points": [
+            "Hook with statistic or pain point",
+            "Why this topic matters in 2026",
+            f"Preview of {product_count} products reviewed",
+            "Testing methodology credibility",
+            "Transition to detailed reviews"
+        ],
+    })
+    
+    # === 2. H2: At a Glance Comparison Table ===
+    sub_prompts.append({
+        "id": 1,
+        "title": "At a Glance: Quick Comparison of Top Picks",
+        "type": "h2_intro",
+        "word_target": 900,
+        "status": "pending",
+        "primary_keyword": primary_kw,
+        "secondary_keywords": secondary_kws,
+        "prompt": f"""Create a comprehensive comparison section for {product_count} {category} products.
+
+REQUIRED MARKDOWN TABLE with these exact columns:
+| Product | Brand | Tier | Best For | Key Feature | Rating |
+
+Include one row for EACH of these products (in this order):
+{chr(10).join(f"{i+1}. {p['name']} ({p.get('tier', 'mid_range')}) - {p.get('why_notable', '')}" for i, p in enumerate(selected_products))}
+
+TABLE RULES:
+- Rating column: Use X/10 format (e.g., 9.2/10)
+- Tier column: Use "💎 Premium", "⭐ Mid-Range", or "💰 Budget"
+- Best For: 3-5 words describing ideal user
+- Key Feature: One standout feature per product
+- DO NOT include a "Buy" or "Price" column (buttons added separately)
+
+BELOW THE TABLE, write 200-300 words explaining:
+- How to read and use this table effectively
+- Quick recommendation by use case (e.g., "If you want X, choose Y")
+- Transition to detailed reviews below
+
+Use primary keyword '{primary_kw}' naturally 2-3 times.
+Do NOT include any buy buttons or pricing information.""",
+        "key_points": [
+            f"Markdown table with {product_count} rows",
+            "Columns: Product, Brand, Tier, Best For, Key Feature, Rating",
+            "How to read the table (200-300 words)",
+            "Quick recommendations by use case"
+        ],
+    })
+    
+    # === 3. H2: Detailed Product Reviews Intro ===
+    sub_prompts.append({
+        "id": 2,
+        "title": "Detailed Product Reviews: Deep Dive into Our Top Picks",
+        "type": "h2_intro",
+        "word_target": 250,
+        "status": "pending",
+        "primary_keyword": primary_kw,
+        "secondary_keywords": secondary_kws,
+        "prompt": f"""Write a 200-300 word introduction to the detailed product reviews section.
+
+EXPLAIN:
+- How we tested these {product_count} products (mention: real-world testing, 
+  competitor analysis, user feedback aggregation, specification comparison)
+- What readers will find in each review below:
+  * Product overview and positioning
+  * Technical specifications
+  * Performance analysis
+  * Honest pros and cons
+  * Verdict on who should buy
+- Brief explanation of our tier system:
+  * 💎 Premium: Flagship products with cutting-edge features
+  * ⭐ Mid-Range: Best balance of features and value
+  * 💰 Budget: Excellent performance at affordable prices
+
+Use expert, authoritative tone. End with a transition like 
+"Let's dive into each product, starting with our top premium pick..."
+
+Use primary keyword '{primary_kw}' once. Do NOT include buy buttons.""",
+        "key_points": [
+            "Testing methodology explanation",
+            "What each review covers",
+            "Tier system explanation",
+            "Transition to individual reviews"
+        ],
+    })
+    
+    # === 4. H3: One detailed review per product ===
+    for i, product in enumerate(selected_products, start=3):
+        product_name = product.get("name", f"Product {i-2}")
+        brand = product.get("brand", product_name.split()[0])
+        tier = product.get("tier", "mid_range")
+        why_notable = product.get("why_notable", "")
+        selling_points = product.get("selling_points", [])
+        existing_pros = product.get("pros", [])
+        existing_cons = product.get("cons", [])
+        popularity = product.get("popularity_score", 5)
+        
+        tier_label = {"premium": "premium/flagship", "mid_range": "mid-range", "budget": "budget"}.get(tier, tier)
+        tier_emoji = {"premium": "💎", "mid_range": "⭐", "budget": "💰"}.get(tier, "•")
+        
+        sub_prompts.append({
+            "id": i,
+            "title": product_name,
+            "type": "h3_detail",
+            "product_name": product_name,
+            "product_brand": brand,
+            "product_tier": tier,
+            "word_target": 600,
+            "status": "pending",
+            "primary_keyword": primary_kw,
+            "secondary_keywords": secondary_kws,
+            "prompt": f"""Write a detailed 500-700 word review of the {product_name} {category}.
+
+This is a {tier_label} product (tier: {tier_emoji} {tier}) in our '{topic}' roundup.
+Popularity score from competitor analysis: {popularity}/10.
+Background: {why_notable}
+
+FOLLOW THIS EXACT STRUCTURE:
+
+**1. Overview Paragraph** (100-150 words)
+- Introduce the {product_name} and its position in the {brand} lineup
+- Who this product is designed for
+- What makes it stand out in the {tier_label} category
+
+**2. Key Specifications** (use bullet list or mini-table)
+- Include 6-8 most important specs relevant to {category}
+- Format: "**Spec Name**: Value/Description"
+- Focus on specs that matter to buyers in 2026
+
+**3. Performance & Real-World Analysis** (150-200 words)
+- How it performs in actual use cases
+- Thermal/performance characteristics
+- Build quality and user experience
+- Compare briefly to similar products in the list
+
+**4. Pros** (bullet list, 4-5 items)
+{chr(10).join(f"- {pro}" for pro in existing_pros) if existing_pros else "- [Real pro based on analysis]"}
+- Each pro must be specific and concrete
+
+**5. Cons** (bullet list, 3-4 items)
+{chr(10).join(f"- {con}" for con in existing_cons) if existing_cons else "- [Real con based on analysis]"}
+- Be honest but fair
+
+**6. Verdict: Who Should Buy** (100-150 words, 3-4 sentences)
+- Clear recommendation statement
+- Ideal user profile
+- Who should skip this and consider alternatives from our list
+
+CRITICAL RULES:
+- DO NOT include any "Buy", "Check Price", "Shop Now", or Amazon-style buttons
+- DO NOT mention specific prices (use "$$$" tier indicators only if needed)
+- DO NOT include affiliate links or CTAs
+- Use first-person expert voice ("we tested", "in our experience")
+- Use primary keyword '{primary_kw}' naturally 1-2 times
+- Use H3 heading ONLY with the clean product name: "### {product_name}"
+  (no "1.", "Review:", or prefixes in the heading itself)""",
+            "key_points": [
+                f"Overview of {product_name}",
+                "Detailed specifications",
+                "Real-world performance analysis",
+                f"4-5 honest pros{f' (including: {existing_pros[0]})' if existing_pros else ''}",
+                f"3-4 honest cons{f' (including: {existing_cons[0]})' if existing_cons else ''}",
+                "Verdict: who should buy"
+            ],
+        })
+    
+    # === 5. H2: Buying Guide ===
+    next_id = len(sub_prompts)
+    sub_prompts.append({
+        "id": next_id,
+        "title": f"Buying Guide: How to Choose the Right {category.title()}",
+        "type": "h2_intro",
+        "word_target": 1000,
+        "status": "pending",
+        "primary_keyword": primary_kw,
+        "secondary_keywords": secondary_kws,
+        "prompt": f"""Write a comprehensive 1000-word buying guide for {topic}.
+
+Structure with H3 subheadings:
+
+### Understanding Your Needs
+- Questions buyers should ask themselves
+- Use case scenarios (gaming, productivity, professional, casual)
+
+### Key Features to Consider
+- 4-5 critical features specific to {category}
+- Explain each with practical examples
+- Mention what specs actually matter vs marketing fluff
+
+### Tier Breakdown: Premium vs Mid-Range vs Budget
+- What you get at each tier
+- When premium is worth it vs when budget suffices
+- Reference products from our reviews as examples
+
+### Common Mistakes to Avoid
+- 3-4 pitfalls buyers encounter
+- How to avoid getting misled by marketing
+
+### Future-Proofing Your Purchase
+- What to look for to ensure longevity
+- Upgrade paths and compatibility considerations
+
+Use educational, expert tone. Weave in primary keyword '{primary_kw}' 3-4 times.
+Do NOT include buy buttons or pricing.""",
+        "key_points": [
+            "Understanding your needs",
+            "Key features to consider",
+            "Tier breakdown (premium/mid-range/budget)",
+            "Common mistakes to avoid",
+            "Future-proofing guidance"
+        ],
+    })
+    
+    # === 6. H2: FAQ ===
+    next_id += 1
+    sub_prompts.append({
+        "id": next_id,
+        "title": f"Frequently Asked Questions About {category.title()}",
+        "type": "h2_intro",
+        "word_target": 800,
+        "status": "pending",
+        "primary_keyword": primary_kw,
+        "secondary_keywords": secondary_kws,
+        "prompt": f"""Write 8-10 FAQ entries about {topic} using schema-friendly format.
+
+Each FAQ entry MUST have:
+- ### Question (as H3 heading)
+- Detailed answer (80-120 words)
+
+COVER THESE QUESTION TYPES:
+1. "What is the best {category} for [specific use case]?" — reference products from our list
+2. "How much should I spend on a {category}?" — tier guidance
+3. "What specs matter most for {category} in 2026?"
+4. "Is [popular product] worth it?" — reference one of our reviewed products
+5. "What's the difference between [tier A] and [tier B]?"
+6. "How long will a {category} last?"
+7. "What should I avoid when buying a {category}?"
+8. "Can I upgrade/expand later?"
+
+FORMAT EXAMPLE:
+### What is the best {category} for beginners?
+For beginners, we recommend starting with a mid-range option like [Product X] from our list. 
+It offers the best balance of features and value without overwhelming new users. You get 
+[feature 1], [feature 2], and solid build quality. Avoid the cheapest options as they often 
+compromise on [critical feature], which leads to frustration and early replacement.
+
+Use conversational but expert tone. Naturally use primary keyword 2-3 times.
+Do NOT include buy buttons or pricing.""",
+        "key_points": [
+            "8-10 FAQ entries",
+            "Schema-friendly Q&A format",
+            "References to reviewed products",
+            "Practical, specific answers"
+        ],
+    })
+    
+    # === 7. H2: Conclusion ===
+    next_id += 1
+    sub_prompts.append({
+        "id": next_id,
+        "title": "Final Verdict: Which Should You Choose?",
+        "type": "h2_intro",
+        "word_target": 400,
+        "status": "pending",
+        "primary_keyword": primary_kw,
+        "secondary_keywords": secondary_kws,
+        "prompt": f"""Write a 400-word conclusion for our '{topic}' article.
+
+STRUCTURE:
+1. **Quick Recap** (100 words): Remind readers of the {product_count} products reviewed 
+   and the three-tier approach.
+
+2. **Top 3 Recommendations by Use Case** (200 words):
+   - Best Overall / Premium Choice: [Reference top product from list]
+   - Best Value / Mid-Range: [Reference mid-range product]
+   - Best Budget Option: [Reference budget product]
+   Each with 2-3 sentences explaining why.
+
+3. **Final Recommendation** (100 words):
+   - Decision framework for readers
+   - Encouragement to match choice to their specific needs
+   - Brief forward-looking statement about the {category} market in 2026+
+
+Use confident, expert tone. Reference specific products from our reviews.
+Use primary keyword '{primary_kw}' 1-2 times.
+Do NOT include buy buttons or pricing.""",
+        "key_points": [
+            f"Quick recap of {product_count} products",
+            "Top 3 recommendations by use case",
+            "Final decision framework",
+            "Forward-looking market statement"
+        ],
+    })
+    
+    logger.info(f"📝 Generated {len(sub_prompts)} product-focused sub-prompts ({product_count} products)")
+    return sub_prompts
+
+
 async def subprompt_generator_node(state: ContentForgeState) -> Dict[str, Any]:
     """Phase 2: Generate section sub-prompts based on research and optimal structure."""
     logger.info("Executing subprompt_generator_node (Phase 2)")
@@ -553,6 +913,27 @@ Each section should have approximately {content_structure.get('avg_h3_per_sectio
 
         logger.info(f"Final prompt count: {len(sub_prompts)} (after splitting)")
         
+        # === LEVEL 3: Override with product-focused structure if applicable ===
+        if (state.get("content_type") == "product_recommendation" 
+            and state.get("selected_products") 
+            and len(state.get("selected_products", [])) >= 3):
+            
+            logger.info("🎯 Using enhanced product-focused sub-prompt structure")
+            product_sub_prompts = _generate_product_subprompts(state)
+            
+            # Override the LLM-generated sub-prompts
+            sub_prompts = product_sub_prompts
+            
+            # Log summary
+            h2_count = sum(1 for p in product_sub_prompts if p.get("type") == "h2_intro")
+            h3_count = sum(1 for p in product_sub_prompts if p.get("type") == "h3_detail")
+            total_words = sum(p.get("word_target", 0) for p in product_sub_prompts)
+            
+            logger.info(f"   Structure: {h2_count} H2 sections + {h3_count} H3 product reviews")
+            logger.info(f"   Total word target: {total_words} words")
+        else:
+            logger.info(f"ℹ️  Using standard LLM sub-prompts (content_type: {state.get('content_type')})")
+
         return {
             "sub_prompts": sub_prompts,
             "total_sections": len(sub_prompts),
@@ -561,6 +942,23 @@ Each section should have approximately {content_structure.get('avg_h3_per_sectio
         }
     except Exception as e:
         logger.error(f"Subprompt generation failed: {e}")
+        
+        # Check if product recommendation override can be used here
+        if (state.get("content_type") == "product_recommendation" 
+            and state.get("selected_products") 
+            and len(state.get("selected_products", [])) >= 3):
+            try:
+                logger.info("🎯 Using enhanced product-focused sub-prompt structure (fallback catch)")
+                product_sub_prompts = _generate_product_subprompts(state)
+                return {
+                    "sub_prompts": product_sub_prompts,
+                    "total_sections": len(product_sub_prompts),
+                    "current_phase": "execution",
+                    "prompt_generation_status": "completed",
+                }
+            except Exception as inner_e:
+                logger.warning(f"Product subprompt generation failed in fallback: {inner_e}")
+
         # Fallback with structure-based prompts
         fallback_prompts = []
         for i, section_name in enumerate(content_structure.get("section_flow", ["Introduction", "Main Content", "Conclusion"])[:6]):
