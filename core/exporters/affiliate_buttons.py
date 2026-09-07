@@ -39,7 +39,7 @@ BEST_DEAL_HTML_TEMPLATE = """
 """
 
 # Compact button for tables (At a Glance)
-TABLE_BUTTON_HTML = """<a href="{url}" target="_blank" rel="noopener noreferrer sponsored nofollow" class="amazon-btn-table">🛒 Buy</a>"""
+TABLE_BUTTON_HTML = """<a href="{url}" target="_blank" rel="noopener noreferrer sponsored nofollow" class="amazon-btn-table" data-product="{product_name}">🛒 Buy</a>"""
 
 
 def render_affiliate_button(
@@ -89,17 +89,32 @@ def inject_buttons_into_markdown(
         # Try multiple patterns with fuzzy matching
         escaped_name = re.escape(product_name)
         
-        # Pattern 1: Exact match
-        pattern1 = rf'(### [^\n]*{escaped_name}[^\n]*\n)((?:(?!^#{2,3} ).*\n?)*?)(?=(?:^#{2,3} |\Z))'
+        # Get all product names from product_links to identify next product boundary
+        other_products = [name for name in product_links.keys() if name != product_name]
         
-        # Pattern 2: H2 heading
-        pattern2 = rf'(## [^\n]*{escaped_name}[^\n]*\n)((?:(?!^## ).*\n?)*?)(?=(?:^## |\Z))'
+        # Build pattern to stop ONLY at next product heading or end of document
+        if other_products:
+            # Escape all other product names
+            escaped_others = [re.escape(name) for name in other_products]
+            # Match if we see any other product heading (H2 or H3)
+            next_product_pattern = '|'.join(escaped_others)
+            stop_pattern = rf'(?=^(?:##|###)\s+(?:{next_product_pattern})|\Z)'
+        else:
+            # No other products, just go to end
+            stop_pattern = r'\Z'
+        
+        # Pattern 1: H3 heading with product name, capture until next PRODUCT heading
+        # Allow any H3 sub-headings (like "### Key Specs", "### Performance") within the section
+        pattern1 = rf'(### [^\n]*{escaped_name}[^\n]*\n)([\s\S]*?){stop_pattern}'
+        
+        # Pattern 2: H2 heading with product name (fallback)
+        pattern2 = rf'(## [^\n]*{escaped_name}[^\n]*\n)([\s\S]*?){stop_pattern}'
         
         # Pattern 3: Fuzzy match (product name appears anywhere in heading)
         keywords = [kw for kw in product_name.split() if len(kw) > 2]
         if keywords:
-            keyword_pattern = '|'.join(re.escape(kw) for kw in keywords[:3])  # Top 3 keywords
-            pattern3 = rf'(#{2,3} [^\n]*(?:{keyword_pattern})[^\n]*\n)((?:(?!^#{2,3} ).*\n?)*?)(?=(?:^#{2,3} |\Z))'
+            keyword_pattern = '|'.join(re.escape(kw) for kw in keywords[:3])
+            pattern3 = rf'(#{2,3} [^\n]*(?:{keyword_pattern})[^\n]*\n)([\s\S]*?){stop_pattern}'
         else:
             pattern3 = None
         
@@ -115,35 +130,46 @@ def inject_buttons_into_markdown(
             heading = match.group(1)
             content = match.group(2)
             
-            # Check if button already exists
-            if "amazon-affiliate-btn" not in content:
-                # INTELLIGENT PLACEMENT: Find conclusion/verdict section
-                # Look for patterns like "### Verdict", "### Conclusion", "### Who Should Buy"
-                conclusion_patterns = [
-                    r'(### [^\n]*(?:Verdict|Conclusion|Who Should Buy|Final Thoughts)[^\n]*\n[^\n]*(?:\n[^\n#][^\n]*)*)',
-                    r'(\*\*Verdict[^\n]*\*\*[^\n]*(?:\n[^\n#][^\n]*)*)',
-                    r'(\*\*Conclusion[^\n]*\*\*[^\n]*(?:\n[^\n#][^\n]*)*)',
-                ]
-                
-                conclusion_match = None
-                for c_pattern in conclusion_patterns:
-                    conclusion_match = re.search(c_pattern, content, re.MULTILINE | re.IGNORECASE)
-                    if conclusion_match:
-                        break
-                
+            # Skip if button already exists
+            if "amazon-affiliate-btn" in content:
+                logger.debug(f"Button already exists for '{product_name}'")
+                continue
+            
+            # Look for conclusion/verdict section
+            conclusion_patterns = [
+                r'###\s+(?:Verdict|Conclusion|Who Should Buy|Final Thoughts|Our Verdict)[^\n]*\n([\s\S]*?)(?=\n###|\n##|\Z)',
+                r'###\s+(?:Verdict|Conclusion|Who Should Buy|Final Thoughts|Our Verdict)[^\n]*\n([\s\S]+?)(?=\n###|\n##|\Z)',
+                r'\*\*(?:Verdict|Conclusion|Who Should Buy|Final Thoughts|Our Verdict)[^\n]*\*\*\n([\s\S]*?)(?=\n###|\n##|\Z)',
+            ]
+            
+            conclusion_match = None
+            conclusion_text = None
+            
+            for c_pattern in conclusion_patterns:
+                conclusion_match = re.search(c_pattern, content, re.MULTILINE | re.IGNORECASE)
                 if conclusion_match:
-                    # Insert button AFTER the conclusion section
-                    conclusion_text = conclusion_match.group(1)
-                    new_content = content.replace(
-                        conclusion_text,
-                        conclusion_text.rstrip() + "\n\n" + button_html + "\n\n"
-                    )
-                else:
-                    # Fallback: Append button at the end of the section
-                    new_content = content.rstrip() + "\n\n" + button_html + "\n\n"
+                    conclusion_text = conclusion_match.group(0)
+                    break
+            
+            if conclusion_match and conclusion_text:
+                # Insert button AFTER the conclusion section
+                # Find the end of the conclusion paragraph(s)
+                conclusion_end_pos = conclusion_match.end()
                 
-                result = result.replace(heading + content, heading + new_content, 1)
-                logger.info(f"✓ Injected affiliate button for '{product_name}'")
+                # Insert button right after conclusion
+                before_conclusion_end = content[:conclusion_end_pos]
+                after_conclusion_end = content[conclusion_end_pos:]
+                
+                new_content = before_conclusion_end + "\n\n" + button_html + "\n\n" + after_conclusion_end
+                
+                logger.info(f"✓ Placed button after conclusion for '{product_name}'")
+            else:
+                # Fallback: Append button at the end of the section
+                new_content = content.rstrip() + "\n\n" + button_html + "\n\n"
+                logger.info(f"✓ Placed button at end of section for '{product_name}' (no conclusion found)")
+            
+            # Replace the section with new content using proper slicing
+            result = result[:match.start()] + heading + new_content + result[match.end():]
         else:
             logger.warning(f"⚠️ Could not find section for product '{product_name}' - button not injected")
     
@@ -173,7 +199,7 @@ def _enhance_at_a_glance_table(markdown: str, product_links: Dict[str, str]) -> 
                     j += 1
                 
                 table_text = "\n".join(table_rows)
-                has_product = any(p_name in table_text for p_name in product_links.keys())
+                has_product = any(p_name.lower() in table_text.lower() for p_name in product_links.keys())
                 
                 if has_product and len(table_rows) >= 3:
                     enhanced_rows = []
