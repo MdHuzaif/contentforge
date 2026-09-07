@@ -1222,19 +1222,34 @@ CRITICAL RANKING REQUIREMENTS:
                 section_content = generated_sections[current_idx].get("content", "")
                 
                 if section_content and len(section_content) > 100:
-                    # Step 1: Try to extract product name from heading
-                    product_name = _extract_product_name(section_title)
-                    
-                    # Step 2: If not in heading, scan first 500 chars of content
+                    # === LEVEL 4: Enhanced product detection using Level 3 metadata ===
+                    current_sub = sub_prompts_list[current_idx] if current_idx < len(sub_prompts_list) else {}
+                    section_type = current_sub.get("type", "h2") if isinstance(current_sub, dict) else "h2"
+
+                    # Priority 1: Use product_name from sub-prompt metadata (Level 3)
+                    product_name = ""
+                    product_metadata = {}
+
+                    if section_type == "h3_detail" and isinstance(current_sub, dict):
+                        product_name = current_sub.get("product_name", "")
+                        product_metadata = {
+                            "brand": current_sub.get("product_brand", ""),
+                            "tier": current_sub.get("product_tier", ""),
+                            "why_notable": current_sub.get("why_notable", ""),
+                            "selling_points": current_sub.get("selling_points", []),
+                            "existing_pros": current_sub.get("pros", []),
+                            "existing_cons": current_sub.get("cons", []),
+                            "popularity": current_sub.get("popularity_score", 5),
+                        }
+                        logger.info(f"Section {current_idx + 1}: Using Level 3 product metadata for '{product_name}'")
+
+                    # Priority 2: Fallback to heading extraction (for non-Level-3 content)
                     if not product_name:
-                        content_sample = section_content[:500]
-                        match = PRODUCT_PATTERN.search(content_sample)
-                        if match:
-                            candidate = match.group(1).strip()
-                            if candidate.lower() not in RETAILERS and len(candidate) > 5:
-                                product_name = candidate
+                        product_name = _extract_product_name(section_title)
+                        if product_name:
+                            logger.info(f"Section {current_idx + 1}: Product detected from heading '{product_name}'")
                     
-                    # Step 3: If product found, auto-refine
+                    # Step 3: If product found, auto-refine with enhanced metadata
                     if product_name:
                         logger.info(f"Section {current_idx + 1}: Product detected '{product_name}', auto-refining...")
                         
@@ -1253,6 +1268,11 @@ CRITICAL RANKING REQUIREMENTS:
                             signals = await gather_product_signals(product_name, section_topic)
                             
                             if signals.get("found", False):
+                                # Enrich signals with Level 3 metadata if available
+                                if product_metadata:
+                                    signals["level3_metadata"] = product_metadata
+                                    logger.info(f"   Using Level 3 metadata: tier={product_metadata.get('tier')}, popularity={product_metadata.get('popularity')}")
+                                
                                 section_dict = {
                                     "heading": section_title,
                                     "product_name": product_name,
@@ -1263,31 +1283,38 @@ CRITICAL RANKING REQUIREMENTS:
                                 }
                                 
                                 # Build context from previous sections
-                                blog_context = "\n\n".join([
-                                    s.get("content", "")[:400]
-                                    for s in generated_sections[:current_idx]
-                                    if s.get("content")
-                                ])
+                                blog_context_parts = []
+                                for prev_idx in range(current_idx):
+                                    prev_item = generated_sections[prev_idx]
+                                    prev_content = prev_item.get("content", "") if isinstance(prev_item, dict) else str(prev_item)
+                                    if prev_content:
+                                        blog_context_parts.append(prev_content[:400])
+                                blog_context = "\n\n".join(blog_context_parts)
                                 
-                                refined_content = await refine_single_section(
-                                    section_dict,
-                                    signals,
-                                    blog_context
-                                )
+                                refined = await refine_single_section(section_dict, signals, blog_context)
                                 
-                                # Only update if refinement actually changed content
-                                if refined_content and refined_content != section_content:
-                                    generated_sections[current_idx]["content"] = refined_content
-                                    generated_sections[current_idx]["refined"] = True
-                                    generated_sections[current_idx]["product_name"] = product_name
-                                    logger.info(f"✓ Section {current_idx + 1} refined for '{product_name}'")
+                                if refined and refined != section_dict["content"]:
+                                    # Check for prices (Amazon policy)
+                                    if not re.search(r'\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?', refined):
+                                        generated_sections[current_idx]["content"] = refined
+                                        generated_sections[current_idx]["refined"] = True
+                                        generated_sections[current_idx]["product_name"] = product_name
+                                        generated_sections[current_idx]["shopping_signals"] = {
+                                            "praise": signals.get("praise", []),
+                                            "complaints": signals.get("complaints", []),
+                                            "snippets_count": len(signals.get("snippets", [])),
+                                            "sources": list(set(signals.get("sources", [])))[:5]
+                                        }
+                                        logger.info(f"✅ Section {current_idx + 1} refined with {len(signals.get('snippets', []))} shopping signals")
+                                    else:
+                                        logger.warning(f"⚠️ Section {current_idx + 1}: Refined content contained prices, using original")
                                 else:
-                                    logger.info(f"Section {current_idx + 1}: Refinement returned same content, keeping original")
+                                    logger.info(f"Section {current_idx + 1}: Refinement unchanged")
                             else:
-                                logger.info(f"Section {current_idx + 1}: No shopping signals found for '{product_name}', keeping original")
+                                logger.info(f"Section {current_idx + 1}: No shopping signals found")
                                 
                         except Exception as refine_err:
-                            logger.warning(f"Section {current_idx + 1}: Auto-refinement failed (keeping original): {refine_err}")
+                            logger.warning(f"Section {current_idx + 1}: Auto-refinement failed: {refine_err}")
                             
                     # === ENHANCED DETECTION: Also check for products in markdown tables ===
                     # This helps detect products mentioned in "At a Glance" comparison tables

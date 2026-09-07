@@ -106,6 +106,23 @@ async def refine_single_section(
     # Build context sample (first 600 chars of blog for tone reference)
     context_sample = blog_context[:600] if blog_context else ""
 
+    # Build enhanced prompt with Level 3 metadata
+    level3_meta = signals.get("level3_metadata", {})
+
+    metadata_section = ""
+    if level3_meta:
+        metadata_section = f"""
+=== PRODUCT METADATA (from competitor analysis) ===
+Brand: {level3_meta.get('brand', 'N/A')}
+Tier: {level3_meta.get('tier', 'mid_range')}
+Why Notable: {level3_meta.get('why_notable', '')}
+Key Selling Points: {', '.join(level3_meta.get('selling_points', []))}
+Popularity Score: {level3_meta.get('popularity', 5)}/10
+Existing Pros: {', '.join(level3_meta.get('existing_pros', []))}
+Existing Cons: {', '.join(level3_meta.get('existing_cons', []))}
+
+Use this metadata to ensure consistency with the competitor analysis."""
+
     user_prompt = f"""BLOG TONE REFERENCE (match this writing style exactly):
 \"\"\"
 {context_sample}
@@ -117,7 +134,7 @@ SECTION TO ENHANCE:
 {original_content}
 \"\"\"
 
-PRODUCT: {section.get('product_name', '')}
+PRODUCT: {section.get('product_name', '')}{metadata_section}
 
 REAL USER FEEDBACK TO INTEGRATE:
 {feedback_block}
