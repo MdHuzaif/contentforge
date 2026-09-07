@@ -576,6 +576,7 @@ Use primary keyword '{primary_kw}' once. Do NOT include buy buttons.""",
         
         tier_label = {"premium": "premium/flagship", "mid_range": "mid-range", "budget": "budget"}.get(tier, tier)
         tier_emoji = {"premium": "💎", "mid_range": "⭐", "budget": "💰"}.get(tier, "•")
+        selling_points_text = ", ".join(selling_points) if selling_points else "highlight its standout features"
         
         sub_prompts.append({
             "id": i,
@@ -593,6 +594,14 @@ Use primary keyword '{primary_kw}' once. Do NOT include buy buttons.""",
 This is a {tier_label} product (tier: {tier_emoji} {tier}) in our '{topic}' roundup.
 Popularity score from competitor analysis: {popularity}/10.
 Background: {why_notable}
+Key Selling Points to Highlight: {selling_points_text}
+
+CRITICAL HEADING RULE - READ CAREFULLY:
+❌ DO NOT include "### {product_name}" or any heading with the product name
+❌ DO NOT repeat the product name as a markdown heading anywhere
+❌ DO NOT start your response with "### {product_name}" or "## {product_name}"
+✅ We will add the heading separately - start DIRECTLY with the content
+✅ Your FIRST line must be the hook question or opening paragraph
 
 FOLLOW THIS EXACT STRUCTURE:
 
@@ -631,8 +640,9 @@ CRITICAL RULES:
 - DO NOT include affiliate links or CTAs
 - Use first-person expert voice ("we tested", "in our experience")
 - Use primary keyword '{primary_kw}' naturally 1-2 times
-- Use H3 heading ONLY with the clean product name: "### {product_name}"
-  (no "1.", "Review:", or prefixes in the heading itself)""",
+- CRITICAL: DO NOT include "### {product_name}" or any heading with the product name.
+- REMEMBER: NO product name heading - start directly with the paragraph/hook.
+- DO NOT start your response with "###" or "##".""",
             "key_points": [
                 f"Overview of {product_name}",
                 "Detailed specifications",
@@ -978,6 +988,32 @@ Each section should have approximately {content_structure.get('avg_h3_per_sectio
             "prompt_generation_status": "completed",
         }
 
+def _sanitize_section_content(content: str, product_name: str = "") -> str:
+    """Remove duplicate product name headings from LLM-generated content.
+    
+    Fixes bug where LLM includes product name as H3 heading at the start of
+    content, which then duplicates with the H2 heading added by blog assembler.
+    """
+    if not content or not product_name:
+        return content
+    
+    import re
+    
+    # Pattern 1: Content starts with ### ProductName or ## ProductName
+    product_pattern = rf'^[#]+\s*{re.escape(product_name)}\s*\n+'
+    content = re.sub(product_pattern, '', content.strip(), flags=re.IGNORECASE)
+    
+    # Pattern 2: Product name heading appears anywhere in the content
+    mid_content_pattern = rf'\n[#]+\s*{re.escape(product_name)}\s*\n'
+    content = re.sub(mid_content_pattern, '\n', content, flags=re.IGNORECASE)
+    
+    # Pattern 3: Product name heading with trailing newline at very start
+    content = re.sub(rf'^(?:#+\s*)?{re.escape(product_name)}\s*\n', '', content, flags=re.IGNORECASE)
+    
+    # Clean up multiple consecutive newlines
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    
+    return content.strip()
 
 async def section_writer_node(state: ContentForgeState) -> Dict[str, Any]:
     """Phase 3: Write one section with accumulated context and update context for next section."""
@@ -1132,6 +1168,16 @@ CRITICAL RANKING REQUIREMENTS:
             system_prompt=SECTION_WRITING_SYSTEM_PROMPT,
             task_type="section_writing",
         )
+        
+        # === NEW: Remove duplicate product name headings ===
+        product_name_for_sanitize = ""
+        if current_idx < len(sub_prompts):
+            current_sub_prompt = sub_prompts[current_idx]
+            if current_sub_prompt.get("type") == "h3_detail":
+                product_name_for_sanitize = current_sub_prompt.get("product_name", "")
+        
+        if product_name_for_sanitize:
+            section_content = _sanitize_section_content(section_content, product_name_for_sanitize)
         
         # === POST-PROCESSING: Clean heading numbers ===
         from core.post_processors.heading_cleaner import clean_section_content
@@ -1294,6 +1340,10 @@ CRITICAL RANKING REQUIREMENTS:
                                 refined = await refine_single_section(section_dict, signals, blog_context)
                                 
                                 if refined and refined != section_dict["content"]:
+                                    # === NEW: Sanitize refined content too ===
+                                    if product_name:
+                                        refined = _sanitize_section_content(refined, product_name)
+                                    
                                     # Check for prices (Amazon policy)
                                     if not re.search(r'\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?', refined):
                                         generated_sections[current_idx]["content"] = refined

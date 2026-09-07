@@ -2,7 +2,7 @@
 📊 COMPREHENSIVE LEVEL 2 TEST REPORT
 ================================================================================
 
-🕐 Test Duration: 72.81 seconds
+🕐 Test Duration: 73.40 seconds
 📝 Total Tests Run: 12
 
 ================================================================================
@@ -15,10 +15,10 @@
   Success Rate: 100.0%
   Average Products: 10.0
   Min/Max Products: 10 / 10
-  Average Duration: 5.93s
-    ✅ Iteration 1: 10 products (competitor_content) - 6.18s
-    ✅ Iteration 2: 10 products (competitor_content) - 5.69s
-    ✅ Iteration 3: 10 products (competitor_content) - 5.93s
+  Average Duration: 6.11s
+    ✅ Iteration 1: 10 products (competitor_content) - 6.33s
+    ✅ Iteration 2: 10 products (competitor_content) - 6.14s
+    ✅ Iteration 3: 10 products (competitor_content) - 5.87s
 
 🔬 Structure Headings Only
 --------------------------------------------------------------------------------
@@ -26,21 +26,21 @@
   Success Rate: 100.0%
   Average Products: 10.0
   Min/Max Products: 10 / 10
-  Average Duration: 4.65s
-    ✅ Iteration 1: 10 products (competitor_content) - 4.35s
-    ✅ Iteration 2: 10 products (competitor_content) - 4.48s
-    ✅ Iteration 3: 10 products (competitor_content) - 5.12s
+  Average Duration: 4.67s
+    ✅ Iteration 1: 10 products (competitor_content) - 4.93s
+    ✅ Iteration 2: 10 products (competitor_content) - 4.72s
+    ✅ Iteration 3: 10 products (competitor_content) - 4.35s
 
 🔬 LLM Auto-Generation
 --------------------------------------------------------------------------------
   Iterations: 3
   Success Rate: 100.0%
-  Average Products: 9.3
-  Min/Max Products: 9 / 10
-  Average Duration: 6.20s
-    ✅ Iteration 1: 9 products (auto_generated) - 5.07s
-    ✅ Iteration 2: 9 products (auto_generated) - 6.65s
-    ✅ Iteration 3: 10 products (auto_generated) - 6.89s
+  Average Products: 9.0
+  Min/Max Products: 9 / 9
+  Average Duration: 6.04s
+    ✅ Iteration 1: 9 products (auto_generated) - 5.71s
+    ✅ Iteration 2: 9 products (auto_generated) - 5.71s
+    ✅ Iteration 3: 9 products (auto_generated) - 6.70s
 
 🔬 Mixed Categories
 --------------------------------------------------------------------------------
@@ -48,10 +48,10 @@
   Success Rate: 100.0%
   Average Products: 10.0
   Min/Max Products: 10 / 10
-  Average Duration: 7.48s
-    ✅ Iteration 1: 10 products (competitor_content) - 4.89s
-    ✅ Iteration 2: 10 products (competitor_content) - 4.99s
-    ✅ Iteration 3: 10 products (hybrid) - 12.56s
+  Average Duration: 7.65s
+    ✅ Iteration 1: 10 products (competitor_content) - 5.54s
+    ✅ Iteration 2: 10 products (competitor_content) - 5.44s
+    ✅ Iteration 3: 10 products (hybrid) - 11.96s
 
 ================================================================================
 🎯 OVERALL SUMMARY
