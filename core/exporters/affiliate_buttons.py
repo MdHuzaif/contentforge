@@ -48,20 +48,15 @@ def render_affiliate_button(
     is_top_pick: bool = False,
     compact: bool = False,
 ) -> str:
-    """Render affiliate button HTML. Returns empty string if no URL."""
+    """Render affiliate button HTML. Accept ANY URL."""
     if not amazon_url or not amazon_url.strip():
         return ""
     
-    # Validate Amazon URL
-    if "amazon." not in amazon_url.lower():
-        logger.warning(f"Non-Amazon URL provided for {product_name}: {amazon_url}")
-        # Still render, but without 'sponsored' rel
-        pass
-    
+    # Accept ANY URL - no validation
     url = amazon_url.strip()
     
     if compact:
-        return TABLE_BUTTON_HTML.format(url=url)
+        return TABLE_BUTTON_HTML.format(url=url, product_name=product_name)
     
     if is_top_pick:
         return BEST_DEAL_HTML_TEMPLATE.format(url=url, product_name=product_name)
@@ -74,9 +69,8 @@ def inject_buttons_into_markdown(
     product_links: Dict[str, str],
     top_pick_product: Optional[str] = None,
 ) -> str:
-    """
-    Inject affiliate buttons into markdown content:
-    1. After each product section (H3 with product name)
+    """Inject affiliate buttons into markdown content:
+    1. After conclusion/verdict in each product section (H3 with product name)
     2. In the 'At a Glance' comparison table
     """
     if not product_links:
@@ -92,20 +86,27 @@ def inject_buttons_into_markdown(
         if not button_html:
             continue
         
-        # Try multiple patterns to find the product section
+        # Try multiple patterns with fuzzy matching
         escaped_name = re.escape(product_name)
         
-        # Pattern 1: H3 heading with product name
-        pattern1 = rf'(### [^\n]*{escaped_name}[^\n]*\n)((?:[^#][^\n]*\n?)*?)(?=(?:## |### |\Z))'
+        # Pattern 1: Exact match
+        pattern1 = rf'(### [^\n]*{escaped_name}[^\n]*\n)((?:(?!^#{2,3} ).*\n?)*?)(?=(?:^#{2,3} |\Z))'
         
-        # Pattern 2: H2 heading with product name (fallback)
-        pattern2 = rf'(## [^\n]*{escaped_name}[^\n]*\n)((?:[^#][^\n]*\n?)*?)(?=(?:## |\Z))'
+        # Pattern 2: H2 heading
+        pattern2 = rf'(## [^\n]*{escaped_name}[^\n]*\n)((?:(?!^## ).*\n?)*?)(?=(?:^## |\Z))'
         
-        # Pattern 3: Any heading containing product name
-        pattern3 = rf'(#{2,3} [^\n]*{escaped_name}[^\n]*\n)((?:[^#][^\n]*\n?)*?)(?=(?:#{2,3} |\Z))'
+        # Pattern 3: Fuzzy match (product name appears anywhere in heading)
+        keywords = [kw for kw in product_name.split() if len(kw) > 2]
+        if keywords:
+            keyword_pattern = '|'.join(re.escape(kw) for kw in keywords[:3])  # Top 3 keywords
+            pattern3 = rf'(#{2,3} [^\n]*(?:{keyword_pattern})[^\n]*\n)((?:(?!^#{2,3} ).*\n?)*?)(?=(?:^#{2,3} |\Z))'
+        else:
+            pattern3 = None
         
         match = None
         for pattern in [pattern1, pattern2, pattern3]:
+            if pattern is None:
+                continue
             match = re.search(pattern, result, re.MULTILINE | re.IGNORECASE)
             if match:
                 break
@@ -116,8 +117,31 @@ def inject_buttons_into_markdown(
             
             # Check if button already exists
             if "amazon-affiliate-btn" not in content:
-                # Append button at the end of this section
-                new_content = content.rstrip() + "\n\n" + button_html + "\n\n"
+                # INTELLIGENT PLACEMENT: Find conclusion/verdict section
+                # Look for patterns like "### Verdict", "### Conclusion", "### Who Should Buy"
+                conclusion_patterns = [
+                    r'(### [^\n]*(?:Verdict|Conclusion|Who Should Buy|Final Thoughts)[^\n]*\n[^\n]*(?:\n[^\n#][^\n]*)*)',
+                    r'(\*\*Verdict[^\n]*\*\*[^\n]*(?:\n[^\n#][^\n]*)*)',
+                    r'(\*\*Conclusion[^\n]*\*\*[^\n]*(?:\n[^\n#][^\n]*)*)',
+                ]
+                
+                conclusion_match = None
+                for c_pattern in conclusion_patterns:
+                    conclusion_match = re.search(c_pattern, content, re.MULTILINE | re.IGNORECASE)
+                    if conclusion_match:
+                        break
+                
+                if conclusion_match:
+                    # Insert button AFTER the conclusion section
+                    conclusion_text = conclusion_match.group(1)
+                    new_content = content.replace(
+                        conclusion_text,
+                        conclusion_text.rstrip() + "\n\n" + button_html + "\n\n"
+                    )
+                else:
+                    # Fallback: Append button at the end of the section
+                    new_content = content.rstrip() + "\n\n" + button_html + "\n\n"
+                
                 result = result.replace(heading + content, heading + new_content, 1)
                 logger.info(f"✓ Injected affiliate button for '{product_name}'")
         else:

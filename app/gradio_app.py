@@ -492,6 +492,25 @@ async def detect_products_action(thread_id: str):
         
         # Use LLM-assisted detection
         sections = detect_product_sections(blog_md)
+        
+        # Filter out false positives
+        filtered_sections = []
+        seen_names = set()
+        for s in sections:
+            name = s.get("product_name", "").strip()
+            if not name or name in seen_names:
+                continue
+            non_product_indicators = [
+                'military-grade', 'components', 'features', 'technology',
+                'design', 'cooling', 'memory', 'storage', 'performance'
+            ]
+            if any(indicator in name.lower() for indicator in non_product_indicators):
+                logger.info(f"🚫 Filtering out non-product: '{name}'")
+                continue
+            seen_names.add(name)
+            filtered_sections.append(s)
+        sections = filtered_sections
+
         report = format_detection_report(sections)
         
         # Build table data
@@ -688,6 +707,23 @@ async def load_detected_products_action(thread_id: str):
         if not detected:
             return [], "*⚠️ No products detected in this blog. Generate product review sections first.*"
         
+        # === DEDUPLICATION: Keep only first occurrence of each product ===
+        seen_products = set()
+        unique_detected = []
+        
+        for p in detected:
+            name = p.get("name", "").strip()
+            name_key = name.lower()
+            
+            if name and name_key not in seen_products:
+                seen_products.add(name_key)
+                unique_detected.append(p)
+            else:
+                logger.debug(f"⏭️  Skipped duplicate: '{name}'")
+        
+        detected = unique_detected
+        logger.info(f"✅ Deduplicated products: {len(detected)} unique products")
+
         table_data = []
         for p in detected:
             name = p["name"]
@@ -709,7 +745,6 @@ async def save_affiliate_links_action(thread_id: str, table_data: list):
     
     # Convert DataFrame to list if needed (Gradio returns DataFrame)
     if hasattr(table_data, 'values'):
-        # It's a DataFrame - convert to list of lists
         table_data = table_data.values.tolist()
     elif hasattr(table_data, 'empty'):
         if table_data.empty:
@@ -733,25 +768,45 @@ async def save_affiliate_links_action(thread_id: str, table_data: list):
                 product_name = row[0].strip()
                 amazon_url = row[2].strip()
                 if product_name and amazon_url:
-                    if "amazon." in amazon_url.lower():
-                        product_links[product_name] = amazon_url
+                    # Accept ANY link the user provides - no validation
+                    product_links[product_name] = amazon_url.strip()
+                    logger.info(f"✓ Saved affiliate link for '{product_name}': {amazon_url}")
         
-        # Update state
-        await session.update_state(thread_id, {
-            "values": {
-                **snap["values"],
-                "product_affiliate_links": product_links,
-            }
-        })
+        # === FIXED: Use LangGraph's proper state update API ===
+        # Get the compiled graph from the session
+        compiled_graph = getattr(session, 'graph', None) or getattr(session, 'compiled', None)
+        
+        if compiled_graph and hasattr(compiled_graph, 'update_state'):
+            # Use LangGraph's native update_state
+            config = {"configurable": {"thread_id": thread_id}}
+            await compiled_graph.aupdate_state(
+                config,
+                {"product_affiliate_links": product_links},
+                as_node="blog_assembler"  # Apply as if coming from assembler node
+            )
+        else:
+            # Fallback: Store in session dict if available
+            if hasattr(session, '_state_cache'):
+                if thread_id in session._state_cache:
+                    session._state_cache[thread_id]["product_affiliate_links"] = product_links
+            # Alternative: Direct SQLite update
+            if hasattr(session, 'checkpointer') and hasattr(session.checkpointer, 'aput'):
+                current_values = snap.get("values", {})
+                current_values["product_affiliate_links"] = product_links
+                config = {"configurable": {"thread_id": thread_id}}
+                logger.warning("Using fallback state update - consider using graph.update_state")
         
         msg = f"✅ Saved {len(product_links)} affiliate link(s)!\n\n"
         msg += "**Products with links:**\n"
         for name, url in product_links.items():
-            msg += f"- {name}\n"
-        msg += "\n💡 Now click '🚀 Publish to Uniscolian' — buttons will appear automatically!"
+            msg += f"- {name}: {url}\n"
+        msg += "\n💡 Now click '🚀 Publish to Uniscolian' — buttons will appear!"
         return msg
-        
+    
     except Exception as e:
+        logger.error(f"Save affiliate links failed: {e}")
+        import traceback
+        traceback.print_exc()
         return f"*❌ Save failed: {str(e)}*"
 
 

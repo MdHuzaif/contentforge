@@ -1299,6 +1299,9 @@ CRITICAL RANKING REQUIREMENTS:
                     if product_name:
                         logger.info(f"Section {current_idx + 1}: Product detected '{product_name}', auto-refining...")
                         
+                        # Save product name in generated section
+                        generated_sections[current_idx]["product_name"] = product_name
+
                         # Track detected product for affiliate linking UI
                         existing_names = {p["name"] for p in detected_products}
                         if product_name not in existing_names:
@@ -1370,28 +1373,72 @@ CRITICAL RANKING REQUIREMENTS:
                     # This helps detect products mentioned in "At a Glance" comparison tables
                     section_content = generated_sections[-1]["content"] if generated_sections else ""
                     
-                    # Look for product names in table rows (pattern: | Product Name | ...)
+                    # Look for product names in table rows
                     table_product_pattern = r'\|\s*([A-Z][A-Za-z0-9\s\-]+(?:ROG|AORUS|Strix|Tomahawk|Crosshair|TUF|Gaming|WiFi|MAX|Elite|Hero)[^\|]*)\s*\|'
                     table_matches = re.findall(table_product_pattern, section_content)
                     
                     existing_names = {p["name"] for p in detected_products}
+                    
+                    # Get known product names from state (Level 2 selection) for validation
+                    selected_products = state.get("selected_products", [])
+                    known_product_names = {p.get("name", "").lower() for p in selected_products if p.get("name")}
+                    known_product_keywords = set()
+                    for p in selected_products:
+                        name = p.get("name", "")
+                        # Extract brand + model keywords
+                        parts = name.split()
+                        if len(parts) >= 2:
+                            known_product_keywords.add(parts[0].lower())  # Brand
+                            known_product_keywords.add(parts[-1].lower())  # Model suffix
+                            known_product_keywords.add(name.lower())  # Full name
+                    
                     for match in table_matches:
-                        # Clean up the product name
                         detected_name = match.strip()
                         
                         # Skip if too short or already detected
                         if len(detected_name) < 10 or detected_name in existing_names:
                             continue
                         
-                        # Add to detected products
-                        detected_products.append({
-                            "name": detected_name,
-                            "section_index": current_idx,
-                            "heading": section_title,
-                            "detected_at": datetime.now().isoformat(),
-                            "source": "table"
-                        })
-                        logger.info(f"📦 Detected product from table: '{detected_name}'")
+                        # === VALIDATION: Filter out false positives ===
+                        # Only accept if it matches a known product OR looks like a real product name
+                        detected_lower = detected_name.lower()
+                        
+                        # Check 1: Direct match with known products
+                        is_known_product = any(
+                            detected_lower in known.lower() or known.lower() in detected_lower
+                            for known in known_product_names
+                            if known
+                        )
+                        
+                        # Check 2: Contains brand + model pattern (e.g., "ASUS ROG", "MSI MPG")
+                        has_brand_model = bool(re.match(
+                            r'^(ASUS|MSI|Gigabyte|ASRock|Biostar|NZXT|EVGA|Intel|AMD)\s+\w+',
+                            detected_name,
+                            re.IGNORECASE
+                        ))
+                        
+                        # Check 3: Exclude common false positive patterns
+                        false_positive_keywords = [
+                            'components', 'features', 'technology', 'design', 'cooling',
+                            'memory', 'storage', 'performance', 'power', 'quality',
+                            'military-grade', 'premium', 'advanced', 'enhanced'
+                        ]
+                        has_false_positive = any(
+                            fp in detected_lower for fp in false_positive_keywords
+                        )
+                        
+                        # Only add if it passes validation
+                        if (is_known_product or has_brand_model) and not has_false_positive:
+                            detected_products.append({
+                                "name": detected_name,
+                                "section_index": current_idx,
+                                "heading": section_title,
+                                "detected_at": datetime.now().isoformat(),
+                                "source": "table"
+                            })
+                            logger.info(f"📦 Detected product from table: '{detected_name}'")
+                        else:
+                            logger.debug(f"⏭️  Skipped false positive from table: '{detected_name}'")
                             
         except ImportError as imp_err:
             logger.warning(f"Auto-refinement imports failed (skipping): {imp_err}")
