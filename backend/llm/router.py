@@ -57,6 +57,43 @@ class LLMRouter:
         except (ValueError, httpx.RequestError) as e:
             logger.error("Gemini call failed: %s", e)
             return FALLBACK_MESSAGE
+    
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        task_type: str = "default",
+        model: str = "gemini-3.5-flash-lite",
+        max_tokens: int = 100,
+        **kwargs,
+    ) -> str:
+        """Synchronous wrapper for generate_text."""
+        try:
+            # Modern Python 3.10+ compatible event loop detection
+            try:
+                loop = asyncio.get_running_loop()
+                loop_is_running = True
+            except RuntimeError:
+                loop_is_running = False
+            
+            if loop_is_running:
+                # Already in async context — use ThreadPoolExecutor to avoid blocking
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(
+                        asyncio.run, 
+                        self.generate_text(prompt, system_prompt, task_type, model)
+                    )
+                    return future.result()
+            else:
+                # No running loop — safe to use asyncio.run()
+                return asyncio.run(
+                    self.generate_text(prompt, system_prompt, task_type, model)
+                )
+        except RuntimeError:
+            return asyncio.run(
+                self.generate_text(prompt, system_prompt, task_type, model)
+            )
 
 
 def clean_llm_response(text: str) -> str:

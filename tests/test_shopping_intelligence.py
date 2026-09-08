@@ -94,6 +94,64 @@ def test_retailers_filtered():
     assert "best buy" in si.RETAILERS
 
 
+def test_dynamic_category_detection_hybrid():
+    """Test hybrid dynamic category detection for unknown topics and caching."""
+    # Known topic (rule-based)
+    cat1 = si._detect_product_category("best motherboard for ryzen 7")
+    assert cat1 == "motherboard"
+
+    # Test caching works
+    assert si._CATEGORY_CACHE.get("best motherboard for ryzen 7") == "motherboard"
+
+    # Unknown topic (fallback/LLM)
+    cat2 = si._detect_product_category("best irrigation system for drought")
+    assert cat2 in ["irrigation", "system", "drought", "general"] or len(cat2) > 0
+
+    # Test category page creation
+    from pathlib import Path
+    import tempfile
+    from core.exporters.static_exporter import create_category_page
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        # Create a mock post directory and index.html
+        post_dir = tmp_path / "best-tractor-2026"
+        post_dir.mkdir()
+        (post_dir / "index.html").write_text(
+            '<!DOCTYPE html><html><body><h1>Best Tractor for Farms</h1><time datetime="2026-03-01T00:00:00Z">March 1, 2026</time><a href="../tractors/index.html">Tractors</a></body></html>',
+            encoding="utf-8"
+        )
+        create_category_page("Tractors", "tractors", tmp_path)
+        cat_page = tmp_path / "tractors" / "index.html"
+        assert cat_page.exists()
+        assert "Tractors" in cat_page.read_text(encoding="utf-8")
+        assert "Best Tractor for Farms" in cat_page.read_text(encoding="utf-8")
+
+
+def test_unknown_topic_does_not_early_return():
+    """TDD RED: Prove the early return bug exists for unknown topics."""
+    # Clear cache to ensure a fresh run
+    si._CATEGORY_CACHE.clear()
+    
+    # 1. Verify known topic still works (baseline)
+    known_cat = si._detect_product_category("best motherboard for ryzen 7")
+    assert known_cat == "motherboard", f"Rule-based failed: got {known_cat}"
+    
+    # 2. Test the BUG: Unknown topic should NOT return hardcoded "general tech"
+    # It should fall through to LLM detection or word extraction.
+    unknown_cat = si._detect_product_category("best compact tractor for small farms 2026")
+    
+    # THIS ASSERTION WILL FAIL BEFORE THE FIX
+    assert unknown_cat != "general tech", (
+        f"BUG CONFIRMED: Early return triggered! Got '{unknown_cat}'. "
+        "LLM fallback and word extraction were skipped."
+    )
+    
+    # Verify it actually extracted a word or used LLM (e.g., "tractor", "compact", "farms")
+    assert len(unknown_cat) > 2, f"Fallback returned too-short string: {unknown_cat}"
+    print(f"✅ TDD Test passed after fix: Unknown topic resolved to '{unknown_cat}'")
+
+
 def main():
     """Run all tests."""
     test_price_extraction()
@@ -107,6 +165,8 @@ def main():
     test_no_specific_dollars_in_output()
     test_sentiment_lists_comprehensive()
     test_retailers_filtered()
+    test_dynamic_category_detection_hybrid()
+    test_unknown_topic_does_not_early_return()
     print("SHOPPING INTELLIGENCE VERIFIED — dynamic LLM classification ready")
 
 

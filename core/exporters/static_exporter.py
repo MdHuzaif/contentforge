@@ -26,6 +26,58 @@ def slugify_slug(text: str) -> str:
     return re.sub(r'[\s-]+', '-', t).strip('-')[:80]
 
 
+def create_category_page(category_name: str, category_slug: str, output_dir: Path):
+    """Create or update category index page with all posts in this category."""
+    category_dir = output_dir / category_slug
+    category_dir.mkdir(parents=True, exist_ok=True)
+    
+    category_index = category_dir / "index.html"
+    
+    # Find all posts in this category
+    posts_in_category = []
+    for post_dir in output_dir.iterdir():
+        if post_dir.is_dir() and post_dir.name != category_slug and not post_dir.name.startswith("_"):
+            post_index = post_dir / "index.html"
+            if post_index.exists():
+                content = post_index.read_text(encoding='utf-8')
+                if f"./../{category_slug}/index.html" in content or f'/{category_slug}/index.html' in content or f'href="../{category_slug}/index.html"' in content or f'{category_slug}' in content:
+                    # Extract title and date
+                    title_match = re.search(r'<h1[^>]*>(.*?)</h1>', content)
+                    date_match = re.search(r'<time[^>]*datetime="([^"]+)"', content)
+                    
+                    if title_match:
+                        posts_in_category.append({
+                            'title': title_match.group(1),
+                            'slug': post_dir.name,
+                            'date': date_match.group(1) if date_match else ''
+                        })
+    
+    # Sort by date (newest first)
+    posts_in_category.sort(key=lambda x: x['date'], reverse=True)
+    
+    # Generate category page HTML (simplified)
+    posts_html = '\n'.join([
+        f'<article><h2><a href="../{p["slug"]}/index.html">{p["title"]}</a></h2>'
+        f'<time>{p["date"]}</time></article>'
+        for p in posts_in_category
+    ])
+    
+    category_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>{category_name} - Uniscolian</title>
+</head>
+<body>
+    <h1>{category_name}</h1>
+    <p>Browse all articles about {category_name.lower()}</p>
+    {posts_html if posts_html else '<p>No articles yet.</p>'}
+</body>
+</html>"""
+    
+    category_index.write_text(category_html, encoding='utf-8')
+    logger.info(f"✅ Created category page: {category_index}")
+
+
 def export_post_to_uniscolian(
     markdown: str,
     topic: str,
@@ -136,6 +188,21 @@ def export_post_to_uniscolian(
     ensure_template(UNISCOLIAN_REFERENCE_POST, UNISCOLIAN_TEMPLATE_PATH)
     template = UNISCOLIAN_TEMPLATE_PATH.read_text(encoding="utf-8")
 
+    # === Dynamic Category Detection ===
+    from backend.tools.shopping_intelligence import _detect_product_category
+
+    # Detect category from topic (if default)
+    if category_name == DEFAULT_CATEGORY_NAME and category_slug == DEFAULT_CATEGORY_SLUG:
+        detected_category = _detect_product_category(topic)
+        category_name = detected_category.title()
+        if not category_name.endswith('s') and detected_category not in ['laptop', 'cpu', 'gpu', 'ssd', 'ram']:
+            category_name += 's'  # Make plural: "Motherboard" → "Motherboards"
+        category_slug = detected_category.lower().replace(' ', '-')
+    else:
+        category_slug = category_slug or slugify_slug(category_name)
+
+    logger.info(f"📂 Exporting with category: '{category_name}' (slug: {category_slug})")
+
     values = {
         "TITLE": title,
         "TITLE_TAG": f"{title} - Uniscolian",
@@ -162,6 +229,9 @@ def export_post_to_uniscolian(
     post_file = post_dir / "index.html"
     post_file.write_text(final_html, encoding="utf-8")
     logger.info("[OK] Uniscolian post exported: %s", post_file)
+
+    # After exporting post
+    create_category_page(category_name, category_slug, UNISCOLIAN_ROOT)
 
     sitemap_updated = add_to_sitemap(UNISCOLIAN_ROOT, slug) if update_sitemap else False
 

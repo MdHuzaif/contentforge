@@ -81,13 +81,88 @@ TOPIC_CATEGORIES = {
 }
 
 
+# Cache for category detection to avoid repeated LLM calls
+_CATEGORY_CACHE: Dict[str, str] = {}
+
+
 def _detect_product_category(topic: str) -> str:
-    """Detect product category from topic."""
+    """Detect product category from topic using hybrid approach:
+    1. Rule-based detection (fast)
+    2. LLM-based detection (fallback for unknown topics)
+    3. Cached results
+    """
+    topic_clean = topic.lower().strip()
+    if topic_clean in _CATEGORY_CACHE:
+        category = _CATEGORY_CACHE[topic_clean]
+        logger.info(f"📂 Category detected (cached): '{topic}' → '{category}'")
+        return category
+
     topic_lower = topic.lower()
+    
+    # === STEP 1: Rule-based detection (existing logic) ===
     for keyword, category in TOPIC_CATEGORIES.items():
         if keyword in topic_lower:
+            logger.info(f"📂 Category detected (rule-based): '{keyword}' → '{category}'")
+            _CATEGORY_CACHE[topic_clean] = category
             return category
-    return "general tech"
+    
+    # === STEP 2: LLM-based detection (fallback for new categories) ===
+    logger.info(f"🤖 No rule-based match for '{topic}' - using LLM detection...")
+    
+    try:
+        from backend.llm.router import LLMRouter
+        
+        prompt = f"""Analyze this blog topic and determine the product category.
+
+Topic: "{topic}"
+
+TASK:
+1. Identify the main product category (e.g., "tractor", "irrigation system", "3D printer", "drone", etc.)
+2. Return ONLY the category name in lowercase
+3. Be specific but not too narrow
+
+EXAMPLES:
+- "best laptop for programming 2026" → laptop
+- "best motherboard for ryzen 9" → motherboard
+- "best tractor for small farm" → tractor
+- "best 3D printer for beginners" → 3d printer
+- "best drone for photography" → drone
+- "best gaming chair for long hours" → gaming chair
+
+Return ONLY the category name (lowercase, no quotes, no explanation):
+"""
+        
+        router = LLMRouter()
+        category = router.generate(prompt, max_tokens=20).strip().lower()
+        
+        # Clean up response
+        category = category.replace('"', '').replace("'", '').strip()
+        
+        if category and len(category) > 2 and len(category) < 50:
+            logger.info(f"✅ Category detected (LLM): '{topic}' → '{category}'")
+            _CATEGORY_CACHE[topic_clean] = category
+            return category
+        else:
+            logger.warning(f"⚠️ LLM returned invalid category: '{category}'")
+    
+    except Exception as e:
+        logger.error(f"❌ LLM category detection failed: {e}")
+    
+    # === STEP 3: Ultimate fallback ===
+    # Extract first noun from topic as category
+    words = topic_lower.split()
+    common_words = {'best', 'top', 'review', 'guide', 'for', 'the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'of', 'with', 'by'}
+    
+    for word in words:
+        if word not in common_words and len(word) > 3:
+            logger.info(f"🔄 Fallback category: extracted '{word}' from topic")
+            _CATEGORY_CACHE[topic_clean] = word
+            return word
+    
+    # Last resort
+    logger.warning(f"⚠️ Could not detect category for '{topic}' - using 'general'")
+    _CATEGORY_CACHE[topic_clean] = "general"
+    return "general"
 
 
 def _extract_prices(text: str) -> List[int]:

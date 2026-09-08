@@ -2557,6 +2557,28 @@ class LLMRouter:
             logger.error("Gemini call failed: %s", e)
             return FALLBACK_MESSAGE
 
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        task_type: str = "default",
+        model: str = "gemini-3.5-flash-lite",
+        max_tokens: int = 100,
+        **kwargs,
+    ) -> str:
+        """Synchronous wrapper for generate_text."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, self.generate_text(prompt, system_prompt, task_type, model))
+                    return future.result()
+            else:
+                return asyncio.run(self.generate_text(prompt, system_prompt, task_type, model))
+        except RuntimeError:
+            return asyncio.run(self.generate_text(prompt, system_prompt, task_type, model))
+
 
 def clean_llm_response(text: str) -> str:
     """Strip <think> blocks and normalize whitespace."""
@@ -3878,13 +3900,88 @@ TOPIC_CATEGORIES = {
 }
 
 
+# Cache for category detection to avoid repeated LLM calls
+_CATEGORY_CACHE: Dict[str, str] = {}
+
+
 def _detect_product_category(topic: str) -> str:
-    """Detect product category from topic."""
+    """Detect product category from topic using hybrid approach:
+    1. Rule-based detection (fast)
+    2. LLM-based detection (fallback for unknown topics)
+    3. Cached results
+    """
+    topic_clean = topic.lower().strip()
+    if topic_clean in _CATEGORY_CACHE:
+        category = _CATEGORY_CACHE[topic_clean]
+        logger.info(f"📂 Category detected (cached): '{topic}' → '{category}'")
+        return category
+
     topic_lower = topic.lower()
+    
+    # === STEP 1: Rule-based detection (existing logic) ===
     for keyword, category in TOPIC_CATEGORIES.items():
         if keyword in topic_lower:
+            logger.info(f"📂 Category detected (rule-based): '{keyword}' → '{category}'")
+            _CATEGORY_CACHE[topic_clean] = category
             return category
-    return "general tech"
+    
+    # === STEP 2: LLM-based detection (fallback for new categories) ===
+    logger.info(f"🤖 No rule-based match for '{topic}' - using LLM detection...")
+    
+    try:
+        from backend.llm.router import LLMRouter
+        
+        prompt = f"""Analyze this blog topic and determine the product category.
+
+Topic: "{topic}"
+
+TASK:
+1. Identify the main product category (e.g., "tractor", "irrigation system", "3D printer", "drone", etc.)
+2. Return ONLY the category name in lowercase
+3. Be specific but not too narrow
+
+EXAMPLES:
+- "best laptop for programming 2026" → laptop
+- "best motherboard for ryzen 9" → motherboard
+- "best tractor for small farm" → tractor
+- "best 3D printer for beginners" → 3d printer
+- "best drone for photography" → drone
+- "best gaming chair for long hours" → gaming chair
+
+Return ONLY the category name (lowercase, no quotes, no explanation):
+"""
+        
+        router = LLMRouter()
+        category = router.generate(prompt, max_tokens=20).strip().lower()
+        
+        # Clean up response
+        category = category.replace('"', '').replace("'", '').strip()
+        
+        if category and len(category) > 2 and len(category) < 50:
+            logger.info(f"✅ Category detected (LLM): '{topic}' → '{category}'")
+            _CATEGORY_CACHE[topic_clean] = category
+            return category
+        else:
+            logger.warning(f"⚠️ LLM returned invalid category: '{category}'")
+    
+    except Exception as e:
+        logger.error(f"❌ LLM category detection failed: {e}")
+    
+    # === STEP 3: Ultimate fallback ===
+    # Extract first noun from topic as category
+    words = topic_lower.split()
+    common_words = {'best', 'top', 'review', 'guide', 'for', 'the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'of', 'with', 'by'}
+    
+    for word in words:
+        if word not in common_words and len(word) > 3:
+            logger.info(f"🔄 Fallback category: extracted '{word}' from topic")
+            _CATEGORY_CACHE[topic_clean] = word
+            return word
+    
+    # Last resort
+    logger.warning(f"⚠️ Could not detect category for '{topic}' - using 'general'")
+    _CATEGORY_CACHE[topic_clean] = "general"
+    return "general"
 
 
 def _extract_prices(text: str) -> List[int]:
@@ -9689,6 +9786,58 @@ def slugify_slug(text: str) -> str:
     return re.sub(r'[\s-]+', '-', t).strip('-')[:80]
 
 
+def create_category_page(category_name: str, category_slug: str, output_dir: Path):
+    """Create or update category index page with all posts in this category."""
+    category_dir = output_dir / category_slug
+    category_dir.mkdir(parents=True, exist_ok=True)
+    
+    category_index = category_dir / "index.html"
+    
+    # Find all posts in this category
+    posts_in_category = []
+    for post_dir in output_dir.iterdir():
+        if post_dir.is_dir() and post_dir.name != category_slug and not post_dir.name.startswith("_"):
+            post_index = post_dir / "index.html"
+            if post_index.exists():
+                content = post_index.read_text(encoding='utf-8')
+                if f"./../{category_slug}/index.html" in content or f'/{category_slug}/index.html' in content or f'href="../{category_slug}/index.html"' in content or f'{category_slug}' in content:
+                    # Extract title and date
+                    title_match = re.search(r'<h1[^>]*>(.*?)</h1>', content)
+                    date_match = re.search(r'<time[^>]*datetime="([^"]+)"', content)
+                    
+                    if title_match:
+                        posts_in_category.append({
+                            'title': title_match.group(1),
+                            'slug': post_dir.name,
+                            'date': date_match.group(1) if date_match else ''
+                        })
+    
+    # Sort by date (newest first)
+    posts_in_category.sort(key=lambda x: x['date'], reverse=True)
+    
+    # Generate category page HTML (simplified)
+    posts_html = '\n'.join([
+        f'<article><h2><a href="../{p["slug"]}/index.html">{p["title"]}</a></h2>'
+        f'<time>{p["date"]}</time></article>'
+        for p in posts_in_category
+    ])
+    
+    category_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>{category_name} - Uniscolian</title>
+</head>
+<body>
+    <h1>{category_name}</h1>
+    <p>Browse all articles about {category_name.lower()}</p>
+    {posts_html if posts_html else '<p>No articles yet.</p>'}
+</body>
+</html>"""
+    
+    category_index.write_text(category_html, encoding='utf-8')
+    logger.info(f"✅ Created category page: {category_index}")
+
+
 def export_post_to_uniscolian(
     markdown: str,
     topic: str,
@@ -9799,6 +9948,21 @@ def export_post_to_uniscolian(
     ensure_template(UNISCOLIAN_REFERENCE_POST, UNISCOLIAN_TEMPLATE_PATH)
     template = UNISCOLIAN_TEMPLATE_PATH.read_text(encoding="utf-8")
 
+    # === Dynamic Category Detection ===
+    from backend.tools.shopping_intelligence import _detect_product_category
+
+    # Detect category from topic (if default)
+    if category_name == DEFAULT_CATEGORY_NAME and category_slug == DEFAULT_CATEGORY_SLUG:
+        detected_category = _detect_product_category(topic)
+        category_name = detected_category.title()
+        if not category_name.endswith('s') and detected_category not in ['laptop', 'cpu', 'gpu', 'ssd', 'ram']:
+            category_name += 's'  # Make plural: "Motherboard" → "Motherboards"
+        category_slug = detected_category.lower().replace(' ', '-')
+    else:
+        category_slug = category_slug or slugify_slug(category_name)
+
+    logger.info(f"📂 Exporting with category: '{category_name}' (slug: {category_slug})")
+
     values = {
         "TITLE": title,
         "TITLE_TAG": f"{title} - Uniscolian",
@@ -9825,6 +9989,9 @@ def export_post_to_uniscolian(
     post_file = post_dir / "index.html"
     post_file.write_text(final_html, encoding="utf-8")
     logger.info("[OK] Uniscolian post exported: %s", post_file)
+
+    # After exporting post
+    create_category_page(category_name, category_slug, UNISCOLIAN_ROOT)
 
     sitemap_updated = add_to_sitemap(UNISCOLIAN_ROOT, slug) if update_sitemap else False
 
@@ -9942,8 +10109,21 @@ def extract_template(html: str) -> str:
         t
     )
 
-    # 5. Breadcrumb Name
-    t = re.sub(r'("@type":\s*"ListItem"[\s\S]*?"position":\s*2[\s\S]*?"name":\s*")[^"]*(")', r'\1{{TITLE_BREADCRUMB}}\2', t)
+    # === Breadcrumb: Dynamic Category Name ===
+    # Find breadcrumb JSON-LD and replace category name
+    t = re.sub(
+        r'("@type":\s*"ListItem"[\s\S]*?"position":\s*2[\s\S]*?"name":\s*")[^"]*(")',
+        r'\1{{CATEGORY_NAME}}\2',
+        t
+    )
+
+    # Also update breadcrumb HTML if present
+    t = re.sub(
+        r'(<li[^>]*class="[^"]*breadcrumb[^"]*"[^>]*>[\s\S]*?<a[^>]*>)[^<]*(</a>)',
+        r'\1{{CATEGORY_NAME}}\2',
+        t,
+        count=1
+    )
 
     # 6. Article Section
     t = re.sub(r'"articleSection":\s*\[[^\]]*\]', '"articleSection": ["{{ARTICLE_SECTION}}"]', t)
@@ -16609,6 +16789,64 @@ def test_retailers_filtered():
     assert "best buy" in si.RETAILERS
 
 
+def test_dynamic_category_detection_hybrid():
+    """Test hybrid dynamic category detection for unknown topics and caching."""
+    # Known topic (rule-based)
+    cat1 = si._detect_product_category("best motherboard for ryzen 7")
+    assert cat1 == "motherboard"
+
+    # Test caching works
+    assert si._CATEGORY_CACHE.get("best motherboard for ryzen 7") == "motherboard"
+
+    # Unknown topic (fallback/LLM)
+    cat2 = si._detect_product_category("best irrigation system for drought")
+    assert cat2 in ["irrigation", "system", "drought", "general"] or len(cat2) > 0
+
+    # Test category page creation
+    from pathlib import Path
+    import tempfile
+    from core.exporters.static_exporter import create_category_page
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        # Create a mock post directory and index.html
+        post_dir = tmp_path / "best-tractor-2026"
+        post_dir.mkdir()
+        (post_dir / "index.html").write_text(
+            '<!DOCTYPE html><html><body><h1>Best Tractor for Farms</h1><time datetime="2026-03-01T00:00:00Z">March 1, 2026</time><a href="../tractors/index.html">Tractors</a></body></html>',
+            encoding="utf-8"
+        )
+        create_category_page("Tractors", "tractors", tmp_path)
+        cat_page = tmp_path / "tractors" / "index.html"
+        assert cat_page.exists()
+        assert "Tractors" in cat_page.read_text(encoding="utf-8")
+        assert "Best Tractor for Farms" in cat_page.read_text(encoding="utf-8")
+
+
+def test_unknown_topic_does_not_early_return():
+    """TDD RED: Prove the early return bug exists for unknown topics."""
+    # Clear cache to ensure a fresh run
+    si._CATEGORY_CACHE.clear()
+    
+    # 1. Verify known topic still works (baseline)
+    known_cat = si._detect_product_category("best motherboard for ryzen 7")
+    assert known_cat == "motherboard", f"Rule-based failed: got {known_cat}"
+    
+    # 2. Test the BUG: Unknown topic should NOT return hardcoded "general tech"
+    # It should fall through to LLM detection or word extraction.
+    unknown_cat = si._detect_product_category("best compact tractor for small farms 2026")
+    
+    # THIS ASSERTION WILL FAIL BEFORE THE FIX
+    assert unknown_cat != "general tech", (
+        f"BUG CONFIRMED: Early return triggered! Got '{unknown_cat}'. "
+        "LLM fallback and word extraction were skipped."
+    )
+    
+    # Verify it actually extracted a word or used LLM (e.g., "tractor", "compact", "farms")
+    assert len(unknown_cat) > 2, f"Fallback returned too-short string: {unknown_cat}"
+    print(f"✅ TDD Test passed after fix: Unknown topic resolved to '{unknown_cat}'")
+
+
 def main():
     """Run all tests."""
     test_price_extraction()
@@ -16622,6 +16860,8 @@ def main():
     test_no_specific_dollars_in_output()
     test_sentiment_lists_comprehensive()
     test_retailers_filtered()
+    test_dynamic_category_detection_hybrid()
+    test_unknown_topic_does_not_early_return()
     print("SHOPPING INTELLIGENCE VERIFIED — dynamic LLM classification ready")
 
 

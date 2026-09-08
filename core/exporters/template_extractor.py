@@ -76,8 +76,21 @@ def extract_template(html: str) -> str:
         t
     )
 
-    # 5. Breadcrumb Name
-    t = re.sub(r'("@type":\s*"ListItem"[\s\S]*?"position":\s*2[\s\S]*?"name":\s*")[^"]*(")', r'\1{{TITLE_BREADCRUMB}}\2', t)
+    # === Breadcrumb: Dynamic Category Name ===
+    # Find breadcrumb JSON-LD and replace category name
+    t = re.sub(
+        r'("@type":\s*"ListItem"[\s\S]*?"position":\s*2[\s\S]*?"name":\s*")[^"]*(")',
+        r'\1{{CATEGORY_NAME}}\2',
+        t
+    )
+
+    # Also update breadcrumb HTML if present
+    t = re.sub(
+        r'(<li[^>]*class="[^"]*breadcrumb[^"]*"[^>]*>[\s\S]*?<a[^>]*>)[^<]*(</a>)',
+        r'\1{{CATEGORY_NAME}}\2',
+        t,
+        count=1
+    )
 
     # 6. Article Section
     t = re.sub(r'"articleSection":\s*\[[^\]]*\]', '"articleSection": ["{{ARTICLE_SECTION}}"]', t)
