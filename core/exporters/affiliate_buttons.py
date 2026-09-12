@@ -78,7 +78,7 @@ def inject_buttons_into_markdown(
     
     result = markdown_content
     
-    # === STEP 1: Inject buttons after product detail sections ===
+    # === STEP 1: Inject buttons at the end of each product section (before next heading) ===
     for product_name, url in product_links.items():
         is_top = (top_pick_product and product_name == top_pick_product)
         button_html = render_affiliate_button(product_name, url, is_top_pick=is_top)
@@ -86,90 +86,50 @@ def inject_buttons_into_markdown(
         if not button_html:
             continue
         
-        # Try multiple patterns with fuzzy matching
-        escaped_name = re.escape(product_name)
+        lines = result.split("\n")
+        target_idx = -1
+        norm_p = product_name.lower().strip()
         
-        # Get all product names from product_links to identify next product boundary
-        other_products = [name for name in product_links.keys() if name != product_name]
-        
-        # Build pattern to stop ONLY at next product heading or end of document
-        if other_products:
-            # Escape all other product names
-            escaped_others = [re.escape(name) for name in other_products]
-            # Match if we see any other product heading (H2 or H3)
-            next_product_pattern = '|'.join(escaped_others)
-            stop_pattern = rf'(?=^(?:##|###)\s+(?:{next_product_pattern})|\Z)'
-        else:
-            # No other products, just go to end
-            stop_pattern = r'\Z'
-        
-        # Pattern 1: H3 heading with product name, capture until next PRODUCT heading
-        # Allow any H3 sub-headings (like "### Key Specs", "### Performance") within the section
-        pattern1 = rf'(### [^\n]*{escaped_name}[^\n]*\n)([\s\S]*?){stop_pattern}'
-        
-        # Pattern 2: H2 heading with product name (fallback)
-        pattern2 = rf'(## [^\n]*{escaped_name}[^\n]*\n)([\s\S]*?){stop_pattern}'
-        
-        # Pattern 3: Fuzzy match (product name appears anywhere in heading)
-        keywords = [kw for kw in product_name.split() if len(kw) > 2]
-        if keywords:
-            keyword_pattern = '|'.join(re.escape(kw) for kw in keywords[:3])
-            pattern3 = rf'(#{2,3} [^\n]*(?:{keyword_pattern})[^\n]*\n)([\s\S]*?){stop_pattern}'
-        else:
-            pattern3 = None
-        
-        match = None
-        for pattern in [pattern1, pattern2, pattern3]:
-            if pattern is None:
-                continue
-            match = re.search(pattern, result, re.MULTILINE | re.IGNORECASE)
-            if match:
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("##") and norm_p in stripped.lower():
+                target_idx = idx
                 break
         
-        if match:
-            heading = match.group(1)
-            content = match.group(2)
+        if target_idx == -1:
+            keywords = [kw for kw in product_name.split() if len(kw) > 2]
+            for idx, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith("##") and any(kw.lower() in stripped.lower() for kw in keywords[:3]):
+                    target_idx = idx
+                    break
+        
+        if target_idx != -1:
+            product_heading_line = lines[target_idx]
+            match_hashes = re.match(r'^(#{1,6})\s+', product_heading_line)
+            level = len(match_hashes.group(1)) if match_hashes else 3
+
+            # Scan forward for the next line whose heading level <= level (e.g. ## or ### when level=3; ignore ####)
+            next_heading_idx = len(lines)
+            for idx in range(target_idx + 1, len(lines)):
+                h_match = re.match(r'^(#{1,6})\s+', lines[idx].strip())
+                if h_match:
+                    h_level = len(h_match.group(1))
+                    if h_level <= level:
+                        next_heading_idx = idx
+                        break
             
-            # Skip if button already exists
-            if "amazon-affiliate-btn" in content:
+            section_text = "\n".join(lines[target_idx:next_heading_idx])
+            if "amazon-affiliate-btn" in section_text:
                 logger.debug(f"Button already exists for '{product_name}'")
                 continue
             
-            # Look for conclusion/verdict section
-            conclusion_patterns = [
-                r'###\s+(?:Verdict|Conclusion|Who Should Buy|Final Thoughts|Our Verdict)[^\n]*\n([\s\S]*?)(?=\n###|\n##|\Z)',
-                r'###\s+(?:Verdict|Conclusion|Who Should Buy|Final Thoughts|Our Verdict)[^\n]*\n([\s\S]+?)(?=\n###|\n##|\Z)',
-                r'\*\*(?:Verdict|Conclusion|Who Should Buy|Final Thoughts|Our Verdict)[^\n]*\*\*\n([\s\S]*?)(?=\n###|\n##|\Z)',
-            ]
-            
-            conclusion_match = None
-            conclusion_text = None
-            
-            for c_pattern in conclusion_patterns:
-                conclusion_match = re.search(c_pattern, content, re.MULTILINE | re.IGNORECASE)
-                if conclusion_match:
-                    conclusion_text = conclusion_match.group(0)
-                    break
-            
-            if conclusion_match and conclusion_text:
-                # Insert button AFTER the conclusion section
-                # Find the end of the conclusion paragraph(s)
-                conclusion_end_pos = conclusion_match.end()
-                
-                # Insert button right after conclusion
-                before_conclusion_end = content[:conclusion_end_pos]
-                after_conclusion_end = content[conclusion_end_pos:]
-                
-                new_content = before_conclusion_end + "\n\n" + button_html + "\n\n" + after_conclusion_end
-                
-                logger.info(f"✓ Placed button after conclusion for '{product_name}'")
-            else:
-                # Fallback: Append button at the end of the section
-                new_content = content.rstrip() + "\n\n" + button_html + "\n\n"
-                logger.info(f"✓ Placed button at end of section for '{product_name}' (no conclusion found)")
-            
-            # Replace the section with new content using proper slicing
-            result = result[:match.start()] + heading + new_content + result[match.end():]
+            # Insert button block immediately before that next heading line (or at document end)
+            lines.insert(next_heading_idx, "")
+            lines.insert(next_heading_idx, button_html)
+            lines.insert(next_heading_idx, "")
+            result = "\n".join(lines)
+            logger.info(f"✓ Placed button at end of section for '{product_name}' (heading level <= {level})")
         else:
             logger.warning(f"⚠️ Could not find section for product '{product_name}' - button not injected")
     

@@ -91,8 +91,19 @@ def export_post_to_uniscolian(
     add_related: bool = True,
     product_affiliate_links: Optional[Dict[str, str]] = None,
     top_pick_product: Optional[str] = None,
+    product_images_map: Optional[Dict[str, str]] = None,
     **kwargs,
 ) -> Dict:
+    # === INJECT PRODUCT IMAGES (if map provided) ===
+    prod_images = product_images_map or kwargs.get("product_images_map", {}) or {}
+    if prod_images:
+        if "product-image" in markdown:
+            logger.info("🖼️ Product images already present in markdown, skipping re-injection")
+        else:
+            from core.exporters.product_image_generator import inject_product_images_into_markdown
+            logger.info(f"🖼️ Injecting product images for {len(prod_images)} products...")
+            markdown = inject_product_images_into_markdown(markdown, prod_images)
+
     # === INJECT AFFILIATE BUTTONS (if links provided) ===
     from core.exporters.affiliate_buttons import (
         inject_buttons_into_markdown,

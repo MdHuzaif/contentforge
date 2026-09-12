@@ -47,3 +47,4 @@ ContentForge AI now supports an interactive 4-phase workflow:
 - **LangGraph interrupts**: Graph pauses after each phase for user interaction
 - **SQLite checkpointer**: State persists across sessions
 - **Global session management**: Single InteractiveSession handles all threads
+

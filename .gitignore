@@ -84,3 +84,7 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+# ContentForge Artifacts & Output Additions
+wp-content/
+codebase_bundle.txt
+html-placement-test/

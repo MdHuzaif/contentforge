@@ -7,7 +7,7 @@ from typing import Optional
 import pandas as pd
 import gradio as gr
 
-from app.config import APP_TITLE, GRADIO_SERVER_NAME, GRADIO_SERVER_PORT, BLOGS_DIR, logger
+from app.config import APP_TITLE, GRADIO_SERVER_NAME, GRADIO_SERVER_PORT, BLOGS_DIR, UNISCOLIAN_ROOT, logger
 from core.exporters.markdown_converter import slugify
 from core.exporters.pdf_exporter import blog_to_pdf
 from core.exporters.static_exporter import export_post_to_uniscolian
@@ -810,6 +810,99 @@ async def save_affiliate_links_action(thread_id: str, table_data: list):
         return f"*❌ Save failed: {str(e)}*"
 
 
+async def detect_product_images_sections_action(thread_id: str):
+    if not thread_id:
+        return "*❌ No active session.*", []
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        if not snap or not snap.get("values"):
+            return "*❌ Session state not found.*", []
+        values = snap["values"]
+        blog_md = values.get("assembled_blog", "")
+        selected_products = values.get("selected_products", [])
+        if not blog_md:
+            return "*❌ No assembled blog found.*", []
+        
+        from core.exporters.product_image_generator import detect_product_headings
+        detected = detect_product_headings(blog_md, selected_products)
+        if not detected:
+            return "*⚠️ No product headings matched selected products.*", []
+        
+        table_data = [[i, d["name"], d["heading_text"], d["level"]] for i, d in enumerate(detected, 1)]
+        return f"✅ Detected {len(detected)} product section(s).", table_data
+    except Exception as e:
+        return f"*❌ Detection failed: {e}*", []
+
+
+async def generate_all_product_images_action(thread_id: str):
+    if not thread_id:
+        return "*❌ No active session.*", [], []
+    try:
+        session = await get_session()
+        snap = await session.get_state(thread_id)
+        if not snap or not snap.get("values"):
+            return "*❌ Session state not found.*", [], []
+        values = snap["values"]
+        blog_md = values.get("assembled_blog", "")
+        topic = values.get("topic", "") or values.get("user_request", "blog")
+        category = values.get("product_category", "technology")
+        selected_products = values.get("selected_products", [])
+        if not blog_md:
+            return "*❌ No assembled blog found.*", [], []
+        
+        from core.exporters.product_image_generator import generate_all_product_images
+        from app.config import CONTENT_OUTPUT_DIR, UNISCOLIAN_ROOT
+        from core.exporters.markdown_converter import slugify
+        
+        slug = slugify(topic)
+        updated_md, report = await asyncio.to_thread(
+            generate_all_product_images,
+            markdown=blog_md,
+            slug=slug,
+            category=category,
+            output_dir=UNISCOLIAN_ROOT,
+            selected_products=selected_products,
+        )
+        
+        images_map = {r["product_name"]: r["rel_path"] for r in report if r["status"] == "success" and r["rel_path"]}
+        
+        compiled_graph = getattr(session, 'graph', None) or getattr(session, 'compiled', None)
+        if compiled_graph and hasattr(compiled_graph, 'update_state'):
+            config = {"configurable": {"thread_id": thread_id}}
+            await compiled_graph.aupdate_state(
+                config,
+                {"product_images_map": images_map, "product_images_report": report, "assembled_blog": updated_md},
+                as_node="blog_assembler"
+            )
+        else:
+            if hasattr(session, 'checkpointer') and hasattr(session.checkpointer, 'aput'):
+                current_values = snap.get("values", {})
+                current_values["product_images_map"] = images_map
+                current_values["product_images_report"] = report
+                current_values["assembled_blog"] = updated_md
+        
+        report_table = [[r["product_name"], r["source"], r["status"], r["rel_path"]] for r in report]
+        
+        gallery_files = []
+        for r in report:
+            if r["status"] == "success" and r["rel_path"]:
+                rel_part = r["rel_path"].replace("../", "")
+                abs_p = UNISCOLIAN_ROOT / rel_part
+                if abs_p.exists():
+                    gallery_files.append(str(abs_p))
+                else:
+                    uni_p = CONTENT_OUTPUT_DIR / rel_part
+                    if uni_p.exists():
+                        gallery_files.append(str(uni_p))
+        
+        msg = f"🎨 Generated product images! Success: {len(images_map)}/{len(report)}"
+        return msg, report_table, gallery_files
+    except Exception as e:
+        logger.error(f"Generate product images action failed: {e}", exc_info=True)
+        return f"*❌ Generation failed: {e}*", [], []
+
+
 async def publish_to_uniscolian_action(thread_id: str):
     """One-click publish: Image + Links + Sitemap + HTML Export."""
     if not thread_id:
@@ -836,8 +929,9 @@ async def publish_to_uniscolian_action(thread_id: str):
         elif isinstance(kw_data, list):
             keywords = [k.get("keyword", "") for k in kw_data if isinstance(k, dict)][:5]
 
-        # Get affiliate links (if user configured any)
+        # Get affiliate links and product images map (if configured)
         product_links = snap["values"].get("product_affiliate_links", {}) or {}
+        product_images_map = snap["values"].get("product_images_map", {}) or {}
         detected = snap["values"].get("detected_products", [])
         
         # Auto-detect top pick (first product or one labeled 'Best Overall')
@@ -861,6 +955,7 @@ async def publish_to_uniscolian_action(thread_id: str):
             avoid_duplicates=True,
             product_affiliate_links=product_links,
             top_pick_product=top_pick,
+            product_images_map=product_images_map,
         )
         
         # Build rich success message
@@ -872,6 +967,9 @@ async def publish_to_uniscolian_action(thread_id: str):
         img_info = result.get("image", {})
         img_src = img_info.get("source", "none")
         msg.append(f"🖼️ **Featured Image:** Generated via `{img_src}`")
+
+        if product_images_map:
+            msg.append(f"🖼️ **Product Images Injected:** {len(product_images_map)} products")
         
         # Related links
         related = result.get("related", [])
@@ -1112,6 +1210,40 @@ def create_ui():
                 
                 affiliate_status_md = gr.Markdown("*Generate a blog first, then load detected products.*")
 
+            # === NEW TAB: Product Images Generation ===
+            with gr.Tab("🖼️ Product Images"):
+                gr.Markdown("### 🖼️ Product Image Generation")
+                gr.Markdown(
+                    "*Detects product headings in your assembled blog and generates editorial product "
+                    "photography using Cloudflare Workers AI (Flux-1-Schnell) with Pollinations fallback.*"
+                )
+                
+                with gr.Row():
+                    detect_product_images_btn = gr.Button("🔍 Detect Product H2/H3 Sections", variant="secondary")
+                    generate_product_images_btn = gr.Button("🎨 Generate All Product Images", variant="primary")
+                
+                product_images_status_md = gr.Markdown("*Assemble your blog first, then detect and generate product images.*")
+                
+                product_images_detection_table = gr.Dataframe(
+                    headers=["#", "Product", "Heading", "Level"],
+                    label="Detected Product Sections",
+                    interactive=False,
+                )
+                
+                gr.Markdown("#### Generation Report & Preview")
+                product_images_report_table = gr.Dataframe(
+                    headers=["Product", "Source", "Status", "Path"],
+                    label="Product Images Report",
+                    interactive=False,
+                )
+                
+                product_images_gallery = gr.Gallery(
+                    label="Generated Product Images Preview",
+                    columns=3,
+                    rows=2,
+                    height="auto",
+                )
+
             # === NEW TAB: Blog Comparison & Export ===
             with gr.Tab("📝 Blog Comparison & Export"):
                 gr.Markdown("### 📝 Original vs Refined Blog")
@@ -1291,6 +1423,19 @@ def create_ui():
             inputs=[thread_id_state],
             outputs=[refined_export_status],
         )
+
+        # Product Images wiring
+        detect_product_images_btn.click(
+            fn=detect_product_images_sections_action,
+            inputs=[thread_id_state],
+            outputs=[product_images_status_md, product_images_detection_table],
+        )
+
+        generate_product_images_btn.click(
+            fn=generate_all_product_images_action,
+            inputs=[thread_id_state],
+            outputs=[product_images_status_md, product_images_report_table, product_images_gallery],
+        )
     
     return demo
 
@@ -1302,6 +1447,7 @@ def launch():
         server_name="127.0.0.1",  # Changed from 0.0.0.0 to fix localhost access
         server_port=GRADIO_SERVER_PORT,
         share=False,
+        allowed_paths=[UNISCOLIAN_ROOT],
     )
 
 

@@ -5,15 +5,20 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables as early as possible
-load_dotenv()
+try:
+    load_dotenv()
+except ImportError:
+    pass
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("contentforge")
 
-# ============ API Keys (Gemini-only) ============
+# ============ API Keys ============
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
+CLOUDFLARE_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+CLOUDFLARE_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
 
 # ============ Path Setup ============
 BASE_DIR = Path(__file__).parent.parent

@@ -73,6 +73,13 @@ def convert_markdown_to_wp_blocks(md: str, uploads_ym: str) -> Tuple[str, List[D
             out.append('<hr class="wp-block-separator has-alpha-channel-opacity">')
             i += 1; continue
 
+        # --- raw html / img / figure ---
+        stripped_line = line.strip()
+        if stripped_line.startswith("<img") or stripped_line.startswith("<figure"):
+            flush_para(para)
+            out.append(stripped_line)
+            i += 1; continue
+
         # --- image ---
         m = re.match(r'^!\[([^\]]*)\]\(([^)]+)\)\s*$', line)
         if m:
