@@ -17,6 +17,7 @@ from core.exporters.image_generator import generate_featured_image
 from core.exporters.sitemap_manager import (ensure_unique_slug, existing_slugs,
                                             add_to_sitemap, build_registry)
 from core.exporters.internal_linker import pick_related, insert_related_links
+from core.exporters.sidebar_related import inject_sidebar_related
 from core.exporters.engagement import ENGAGEMENT_BLOCK
 
 
@@ -234,6 +235,7 @@ def export_post_to_uniscolian(
         "ENGAGEMENT_WIDGETS": ENGAGEMENT_BLOCK,
     }
     final_html = fill_template(template, values)
+    final_html = inject_sidebar_related(final_html, current_slug=slug, title=title, keywords=(keywords or []))
 
     post_dir = UNISCOLIAN_ROOT / slug
     post_dir.mkdir(parents=True, exist_ok=True)

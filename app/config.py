@@ -68,3 +68,4 @@ DEFAULT_CATEGORY_SLUG = "laptop"
 SITE_BASE_URL = os.environ.get("SITE_BASE_URL", "https://uniscolian.com")
 POST_REGISTRY_PATH = UNISCOLIAN_ROOT / "_template" / "post_registry.json"
 RELATED_LINKS_COUNT = int(os.environ.get("RELATED_LINKS_COUNT", "2"))
+SIDEBAR_RELATED_COUNT = int(os.environ.get("SIDEBAR_RELATED_COUNT", "5"))
