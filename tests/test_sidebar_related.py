@@ -104,7 +104,7 @@ def test_responsive_css_present():
     page = '<html><head></head><body><article><p>Content</p></article></body></html>'
     res = inject_sidebar_related(page, "curr", "Title", ["kw"], n=1)
     assert "<!-- cf-page-layout-css -->" in res
-    assert ".cf-page-layout{display:block;}" in res
+    assert "padding:0 16px" in res
     assert "@media (min-width:1024px)" in res
     assert "grid-template-columns:minmax(0,1fr) 320px" in res
     assert ".cf-page-sidebar{position:sticky" in res

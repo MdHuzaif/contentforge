@@ -283,12 +283,16 @@ def inject_sidebar_related(
 
         if "<!-- cf-page-layout-css -->" not in final_html:
             layout_css = """<!-- cf-page-layout-css --><style>
-.cf-page-layout{display:block;}
+.cf-page-layout{display:block;padding:0 16px;box-sizing:border-box;}
+.cf-page-layout article{padding:0;box-sizing:border-box;}
 .cf-page-sidebar{margin:40px auto 0;max-width:750px;}
+@media (min-width:600px){
+.cf-page-layout{padding:0 24px;}
+}
 @media (min-width:1024px){
-  .cf-page-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:36px;align-items:start;max-width:1200px;width:100%;margin:0 auto;padding:0 20px;box-sizing:border-box;}
-  .cf-page-sidebar{position:sticky;top:24px;margin:0;max-width:none;}
-  .cf-page-layout article{max-width:none!important;width:auto!important;margin:0!important;}
+.cf-page-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:36px;align-items:start;max-width:1200px;width:100%;margin:0 auto;padding:0 24px;box-sizing:border-box;}
+.cf-page-sidebar{position:sticky;top:24px;margin:0;max-width:none;}
+.cf-page-layout article{max-width:none!important;width:auto!important;margin:0!important;}
 }
 </style>"""
             if "</head>" in final_html:
