@@ -1322,6 +1322,9 @@ CRITICAL RANKING REQUIREMENTS:
                                     signals["level3_metadata"] = product_metadata
                                     logger.info(f"   Using Level 3 metadata: tier={product_metadata.get('tier')}, popularity={product_metadata.get('popularity')}")
                                 
+                                logger.info(f"🔧 DEBUG signals built for {product_name}: praise={signals.get('praise')}, complaints={signals.get('complaints')}, tier={product_metadata.get('tier') if product_metadata else 'N/A'}")
+                                logger.info(f"🔧 DEBUG signals dict keys: {list(signals.keys()) if isinstance(signals, dict) else 'NOT A DICT'}")
+                                
                                 section_dict = {
                                     "heading": section_title,
                                     "product_name": product_name,

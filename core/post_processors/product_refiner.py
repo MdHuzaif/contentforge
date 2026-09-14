@@ -45,7 +45,7 @@ async def gather_product_signals(product_name: str, topic: str = "") -> Dict:
     
     if not snippets:
         logger.warning(f"No snippets found for product: {product_name}")
-        return {"product": product_name, "praise": [], "complaints": [], "found": False}
+        return {"product": product_name, "praise": [], "complaints": [], "snippets": [], "snippet_count": 0, "found": False}
     
     text = " ".join(snippets).lower()
     logger.info(f"Product {product_name}: {len(snippets)} snippets, {len(text)} chars")
@@ -60,9 +60,20 @@ async def gather_product_signals(product_name: str, topic: str = "") -> Dict:
         "product": product_name,
         "praise": praise,
         "complaints": complaints,
+        "snippets": snippets,
         "snippet_count": len(snippets),
         "found": True,
     }
+
+
+async def call_llm(prompt: str) -> str:
+    """Helper for calling LLM (used in integration tests)."""
+    router = LLMRouter(task_type="section_writing")
+    return await router.generate_text(
+        prompt=prompt,
+        system_prompt=REFINE_SYSTEM_PROMPT,
+        task_type="section_writing",
+    )
 
 
 REFINE_SYSTEM_PROMPT = """You are an expert product review editor enhancing existing content with real user feedback.
@@ -86,6 +97,12 @@ async def refine_single_section(
     blog_context: str,
 ) -> str:
     """Refine a single product section using LLM with blog context for tone."""
+    logger.info(f"🔧 DEBUG refine_single_section received: {type(signals)}")
+    if isinstance(signals, dict):
+        logger.info(f"🔧 DEBUG signals keys: {list(signals.keys())}")
+        logger.info(f"🔧 DEBUG praise: {signals.get('praise', 'MISSING')}")
+        logger.info(f"🔧 DEBUG complaints: {signals.get('complaints', 'MISSING')}")
+
     original_content = section["content"]
     original_heading = section["heading"]
     
@@ -149,12 +166,7 @@ Add only 2-3 sentences of user sentiment, woven naturally into existing paragrap
 Output ONLY the enhanced section starting with the ### heading. No code fences."""
 
     try:
-        router = LLMRouter(task_type="section_writing")
-        refined = await router.generate_text(
-            prompt=user_prompt,
-            system_prompt=REFINE_SYSTEM_PROMPT,
-            task_type="section_writing",
-        )
+        refined = await call_llm(user_prompt)
         
         # Clean up response
         refined = refined.strip()
