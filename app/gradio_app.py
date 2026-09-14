@@ -1133,60 +1133,60 @@ def create_ui():
                     )
                 publish_status_md = gr.Markdown("*Generate and assemble a blog first, then click publish.*")
 
-            # === NEW TAB: Product Detection ===
-            with gr.Tab("🔍 Product Detection"):
-                gr.Markdown("### 🔍 Product Section Detection")
-                gr.Markdown("*Detects product-specific H3 sections in your assembled blog. "
-                           "Code-based detection (no LLM) for speed and accuracy.*")
+            # # === NEW TAB: Product Detection ===
+            # with gr.Tab("🔍 Product Detection"):
+            #     gr.Markdown("### 🔍 Product Section Detection")
+            #     gr.Markdown("*Detects product-specific H3 sections in your assembled blog. "
+            #                "Code-based detection (no LLM) for speed and accuracy.*")
                 
-                detect_btn = gr.Button(
-                    "🔍 Detect Product Sections",
-                    variant="secondary",
-                    size="lg",
-                )
+            #     detect_btn = gr.Button(
+            #         "🔍 Detect Product Sections",
+            #         variant="secondary",
+            #         size="lg",
+            #     )
                 
-                detection_report_md = gr.Markdown("*Click 'Detect Product Sections' after assembling your blog.*")
+            #     detection_report_md = gr.Markdown("*Click 'Detect Product Sections' after assembling your blog.*")
                 
-                detection_table = gr.Dataframe(
-                    headers=["#", "Product Name", "H3 Heading", "Words", "Preview", "Relevance"],
-                    label="Detected Product Sections",
-                    interactive=False,
-                )
+            #     detection_table = gr.Dataframe(
+            #         headers=["#", "Product Name", "H3 Heading", "Words", "Preview", "Relevance"],
+            #         label="Detected Product Sections",
+            #         interactive=False,
+            #     )
                 
-                gr.Markdown("---")
-                gr.Markdown("### 🔎 Inspect Section Before Refining")
-                gr.Markdown("*Select a product to see the exact section content that will be refined.*")
+            #     gr.Markdown("---")
+            #     gr.Markdown("### 🔎 Inspect Section Before Refining")
+            #     gr.Markdown("*Select a product to see the exact section content that will be refined.*")
                 
-                product_dropdown = gr.Dropdown(
-                    label="Select Product to Inspect",
-                    choices=[],
-                    interactive=True,
-                )
+            #     product_dropdown = gr.Dropdown(
+            #         label="Select Product to Inspect",
+            #         choices=[],
+            #         interactive=True,
+            #     )
                 
-                section_detail_md = gr.Markdown("*Run detection first.*")
+            #     section_detail_md = gr.Markdown("*Run detection first.*")
                 
-                gr.Markdown("---")
+            #     gr.Markdown("---")
                 
-                # NEW: Enhancement button
-                enhance_btn = gr.Button(
-                    "🤖 Enhance with AI (Find Missed Products)",
-                    variant="secondary",
-                    size="sm",
-                )
-                enhancement_report_md = gr.Markdown("")
+            #     # NEW: Enhancement button
+            #     enhance_btn = gr.Button(
+            #         "🤖 Enhance with AI (Find Missed Products)",
+            #         variant="secondary",
+            #         size="sm",
+            #     )
+            #     enhancement_report_md = gr.Markdown("")
                 
-                refine_btn = gr.Button(
-                    "✨ Refine Product Sections (with Shopping Signals)",
-                    variant="primary",
-                    size="lg",
-                )
+            #     refine_btn = gr.Button(
+            #         "✨ Refine Product Sections (with Shopping Signals)",
+            #         variant="primary",
+            #         size="lg",
+            #     )
                 
-                refinement_report_md = gr.Markdown("")
+            #     refinement_report_md = gr.Markdown("")
                 
-                # Hidden state to store detected sections and refined blog
-                detected_sections_state = gr.State([])
-                refined_blog_state = gr.State("")
-                original_blog_state = gr.State("")
+            #     # Hidden state to store detected sections and refined blog
+            #     detected_sections_state = gr.State([])
+            #     refined_blog_state = gr.State("")
+            #     original_blog_state = gr.State("")
 
             # === NEW TAB: Affiliate Links Configuration ===
             with gr.Tab("💰 Affiliate Links"):
@@ -1244,31 +1244,31 @@ def create_ui():
                     height="auto",
                 )
 
-            # === NEW TAB: Blog Comparison & Export ===
-            with gr.Tab("📝 Blog Comparison & Export"):
-                gr.Markdown("### 📝 Original vs Refined Blog")
-                gr.Markdown("*Compare the original and refined versions. Export whichever you prefer.*")
+            # # === NEW TAB: Blog Comparison & Export ===
+            # with gr.Tab("📝 Blog Comparison & Export"):
+            #     gr.Markdown("### 📝 Original vs Refined Blog")
+            #     gr.Markdown("*Compare the original and refined versions. Export whichever you prefer.*")
                 
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("#### 📄 Original Blog")
-                        original_blog_display = gr.Markdown("*Original assembled blog will appear here after assembly.*")
-                        export_original_btn = gr.Button(
-                            "🚀 Export ORIGINAL to Uniscolian",
-                            variant="secondary",
-                            size="lg",
-                        )
-                        original_export_status = gr.Markdown("")
+            #     with gr.Row():
+            #         with gr.Column():
+            #             gr.Markdown("#### 📄 Original Blog")
+            #             original_blog_display = gr.Markdown("*Original assembled blog will appear here after assembly.*")
+            #             export_original_btn = gr.Button(
+            #                 "🚀 Export ORIGINAL to Uniscolian",
+            #                 variant="secondary",
+            #                 size="lg",
+            #             )
+            #             original_export_status = gr.Markdown("")
                     
-                    with gr.Column():
-                        gr.Markdown("#### ✨ Refined Blog")
-                        refined_blog_display = gr.Markdown("*Refined blog will appear here after refinement.*")
-                        export_refined_btn = gr.Button(
-                            "🚀 Export REFINED to Uniscolian",
-                            variant="primary",
-                            size="lg",
-                        )
-                        refined_export_status = gr.Markdown("")
+            #         with gr.Column():
+            #             gr.Markdown("#### ✨ Refined Blog")
+            #             refined_blog_display = gr.Markdown("*Refined blog will appear here after refinement.*")
+            #             export_refined_btn = gr.Button(
+            #                 "🚀 Export REFINED to Uniscolian",
+            #                 variant="primary",
+            #                 size="lg",
+            #             )
+            #             refined_export_status = gr.Markdown("")
         
         # === EVENT HANDLERS WITH DOUBLE-CLICK PREVENTION ===
         
@@ -1346,7 +1346,7 @@ def create_ui():
         assemble_btn.click(
             fn=assemble_blog_action,
             inputs=[thread_id_state],
-            outputs=[final_blog_md, blog_stats, download_md_btn, download_pdf_btn, publish_uniscolian_btn, original_blog_display],
+            outputs=[final_blog_md, blog_stats, download_md_btn, download_pdf_btn, publish_uniscolian_btn],
         ).then(
             fn=load_detected_products_action,
             inputs=[thread_id_state],
@@ -1373,56 +1373,56 @@ def create_ui():
         )
 
         # Product Detection wiring (5 outputs)
-        detect_btn.click(
-            fn=detect_products_action,
-            inputs=[thread_id_state],
-            outputs=[
-                detection_report_md,
-                detection_table,
-                detected_sections_state,
-                product_dropdown,
-                section_detail_md,
-            ],
-        )
+        # detect_btn.click(
+        #     fn=detect_products_action,
+        #     inputs=[thread_id_state],
+        #     outputs=[
+        #         detection_report_md,
+        #         detection_table,
+        #         detected_sections_state,
+        #         product_dropdown,
+        #         section_detail_md,
+        #     ],
+        # )
         
-        # Show section detail when dropdown changes
-        product_dropdown.change(
-            fn=show_section_detail_action,
-            inputs=[product_dropdown, detected_sections_state],
-            outputs=[section_detail_md],
-        )
+        # # Show section detail when dropdown changes
+        # product_dropdown.change(
+        #     fn=show_section_detail_action,
+        #     inputs=[product_dropdown, detected_sections_state],
+        #     outputs=[section_detail_md],
+        # )
 
-        # AI Enhancement wiring
-        enhance_btn.click(
-            fn=enhance_detection_action,
-            inputs=[thread_id_state, detected_sections_state],
-            outputs=[enhancement_report_md, detected_sections_state],
-        )
+        # # AI Enhancement wiring
+        # enhance_btn.click(
+        #     fn=enhance_detection_action,
+        #     inputs=[thread_id_state, detected_sections_state],
+        #     outputs=[enhancement_report_md, detected_sections_state],
+        # )
         
-        # Refine button wiring — updates report, refined state, original state, and displays
-        refine_btn.click(
-            fn=refine_products_action,
-            inputs=[thread_id_state],
-            outputs=[refinement_report_md, refined_blog_state, original_blog_state],
-        ).then(
-            fn=lambda r, o: (o if o else "*No blog assembled yet.*",
-                            r if r else "*Run refinement first to see the refined version.*"),
-            inputs=[refined_blog_state, original_blog_state],
-            outputs=[original_blog_display, refined_blog_display],
-        )
+        # # Refine button wiring — updates report, refined state, original state, and displays
+        # refine_btn.click(
+        #     fn=refine_products_action,
+        #     inputs=[thread_id_state],
+        #     outputs=[refinement_report_md, refined_blog_state, original_blog_state],
+        # ).then(
+        #     fn=lambda r, o: (o if o else "*No blog assembled yet.*",
+        #                     r if r else "*Run refinement first to see the refined version.*"),
+        #     inputs=[refined_blog_state, original_blog_state],
+        #     outputs=[original_blog_display, refined_blog_display],
+        # )
         
-        # Export buttons wiring
-        export_original_btn.click(
-            fn=publish_to_uniscolian_action,
-            inputs=[thread_id_state],
-            outputs=[original_export_status],
-        )
+        # # Export buttons wiring
+        # export_original_btn.click(
+        #     fn=publish_to_uniscolian_action,
+        #     inputs=[thread_id_state],
+        #     outputs=[original_export_status],
+        # )
         
-        export_refined_btn.click(
-            fn=export_refined_to_uniscolian_action,
-            inputs=[thread_id_state],
-            outputs=[refined_export_status],
-        )
+        # export_refined_btn.click(
+        #     fn=export_refined_to_uniscolian_action,
+        #     inputs=[thread_id_state],
+        #     outputs=[refined_export_status],
+        # )
 
         # Product Images wiring
         detect_product_images_btn.click(
