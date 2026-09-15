@@ -320,5 +320,5 @@ def test_export_kwarg_additive():
 
 def test_crop_resize_preserves_aspect():
     im = Image.new("RGB", (1024, 1024), color="red")
-    resized = _crop_resize(im, 900, 752)
-    assert resized.size == (900, 752)
+    resized = _crop_resize(im, 1200, 675)
+    assert resized.size == (1200, 675)

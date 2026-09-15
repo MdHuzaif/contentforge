@@ -37,8 +37,8 @@ def test_pil_fallback_image(tmp_path, monkeypatch):
     assert img_path.exists()
     from PIL import Image
     with Image.open(img_path) as im:
-        assert im.size == (900, 752)
-    print("[OK] PIL fallback image 900x752 verified")
+        assert im.size == (1200, 675)
+    print("[OK] PIL fallback image 1200x675 verified")
 
 def main():
     test_assembler_source_cleaned()

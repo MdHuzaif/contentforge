@@ -88,10 +88,10 @@ def convert_markdown_to_wp_blocks(md: str, uploads_ym: str) -> Tuple[str, List[D
             rel = f"wp-content/uploads/{uploads_ym}/{fname}"
             images.append({"filename": fname, "relative_path": rel, "alt": alt, "role": "inline"})
             out.append(
-                f'<figure class="wp-block-image aligncenter size-full is-resized">'
-                f'<img decoding="async" width="450" height="377" src="./../{rel}" srcset="./../{rel} 2x" '
+                f'<figure class="wp-block-image aligncenter size-full">'
+                f'<img decoding="async" src="./../{rel}" srcset="./../{rel} 2x" '
                 f'alt="{alt}" class="wp-image-1126" loading="lazy" '
-                f'style="width:450px;max-width:100%;height:auto;">'
+                f'style="width:100%;height:auto;max-height:500px;object-fit:cover;">'
                 f'<figcaption class="wp-element-caption">📷 {alt} — <code>{rel}</code></figcaption></figure>'
             )
             i += 1; continue

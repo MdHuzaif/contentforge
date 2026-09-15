@@ -179,18 +179,18 @@ def export_post_to_uniscolian(
     # Featured figure at top of content (like reference posts)
     if img_info.get("file_exists"):
         featured_figure = (
-            f'<figure class="wp-block-image aligncenter size-full is-resized">'
-            f'<img decoding="async" width="450" height="377" src="./../{featured_rel}" srcset="./../{featured_rel} 2x" '
+            f'<figure class="wp-block-image aligncenter size-full">'
+            f'<img decoding="async" src="./../{featured_rel}" srcset="./../{featured_rel} 2x" '
             f'alt="{title}" class="wp-image-1126" loading="lazy" '
-            f'style="width:450px;max-width:100%;height:auto;">'
+            f'style="width:100%;height:auto;max-height:500px;object-fit:cover;">'
             f'</figure>'
         )
     else:
         featured_figure = (
-            f'<figure class="wp-block-image aligncenter size-full is-resized">'
-            f'<img decoding="async" width="450" height="377" src="./../{featured_rel}" srcset="./../{featured_rel} 2x" '
+            f'<figure class="wp-block-image aligncenter size-full">'
+            f'<img decoding="async" src="./../{featured_rel}" srcset="./../{featured_rel} 2x" '
             f'alt="{title}" class="wp-image-1126" loading="lazy" '
-            f'style="width:450px;max-width:100%;height:auto;">'
+            f'style="width:100%;height:auto;max-height:500px;object-fit:cover;">'
             f'<figcaption class="wp-element-caption">[IMAGE] {title} — <code>{featured_rel}</code></figcaption></figure>'
         )
 

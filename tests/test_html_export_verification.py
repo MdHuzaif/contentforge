@@ -200,7 +200,7 @@ def test_exported_html_placement():
     assert html.count('class="product-image"') == 6, f"Expected exactly 6 product-image classes, found {html.count('class=\"product-image\"')}"
 
     # R1b: Assert every product image is wrapped exactly like the featured image wrapper
-    figure_pattern = r'<figure class="wp-block-image aligncenter size-full is-resized"><img[^>]*class="product-image"[^>]*style="width:450px;max-width:100%;height:auto;">\s*</figure>'
+    figure_pattern = r'<figure class="wp-block-image aligncenter size-full"><img[^>]*class="product-image"[^>]*style="width:100%;height:auto;max-height:500px;object-fit:cover;">\s*</figure>'
     figure_matches = list(re.finditer(figure_pattern, html))
     assert len(figure_matches) == 6, f"Expected 6 product image figure wrappers matching featured style, found {len(figure_matches)}"
 

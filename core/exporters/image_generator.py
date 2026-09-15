@@ -9,14 +9,14 @@ import httpx
 from app.config import logger, UNISCOLIAN_UPLOADS_DIR
 
 DISPLAY_W, DISPLAY_H = 450, 377
-GEN_W, GEN_H = 900, 752  # 2x file resolution for retina sharpness
+GEN_W, GEN_H = 1200, 675  # 16:9 widescreen resolution
 
 # HF Space API endpoint
 HF_SPACE_NAME = "M3st3rJ4k3l/FLUX.2-Klein-Multi-LoRA"
 
 # Pollinations URL (fallback 3)
 POLLINATIONS_URL = ("https://image.pollinations.ai/prompt/{prompt}"
-                    "?width=900&height=752&model=flux&nologo=true&seed=7")
+                    "?width=1200&height=675&model=flux&nologo=true&seed=7")
 
 
 def _build_enhanced_prompt(title: str) -> str:
@@ -56,7 +56,6 @@ def _hf_space_api(prompt_text: str) -> Optional[bytes]:
         # This matches the HF Space's best settings
         result = client.predict(
             prompt=prompt_text,
-            negative_prompt="blurry, low quality, distorted, text, watermark, logo",
             seed=42,
             randomize_seed=False,
             num_inference_steps=20,
@@ -134,7 +133,7 @@ def _pollinations_api(prompt_text: str) -> Optional[bytes]:
 
 
 def _pil_fallback(title: str, path: Path) -> None:
-    """Offline branded placeholder card 900x752 (fallback 4)."""
+    """Offline branded placeholder card 1200x675 (fallback 4)."""
     from PIL import Image, ImageDraw, ImageFont
     
     img = Image.new("RGB", (GEN_W, GEN_H))
@@ -155,33 +154,33 @@ def _pil_fallback(title: str, path: Path) -> None:
         font = ImageFont.load_default()
         small = font
     
-    # Wrap title (~28 chars per line, max 6 lines)
+    # Wrap title (~40 chars per line, max 4 lines)
     words, lines, cur = title.split(), [], ""
     for w in words:
-        if len(cur) + len(w) + 1 <= 28:
+        if len(cur) + len(w) + 1 <= 40:
             cur = f"{cur} {w}".strip()
         else:
             lines.append(cur)
             cur = w
-            if len(lines) == 6:
+            if len(lines) == 4:
                 break
-    if cur and len(lines) < 6:
+    if cur and len(lines) < 4:
         lines.append(cur)
     
     # Draw text
-    y0 = 240
+    y0 = 180
     for ln in lines:
-        draw.text((50, y0), ln, fill=(255, 255, 255), font=font)
+        draw.text((60, y0), ln, fill=(255, 255, 255), font=font)
         y0 += 68
     
     # Brand watermark
-    draw.text((50, 670), "UNISCOLIAN", fill=(200, 220, 255), font=small)
+    draw.text((60, GEN_H - 45), "UNISCOLIAN", fill=(200, 220, 255), font=small)
     
     img.save(path, "JPEG", quality=88)
 
 
 def generate_featured_image(topic: str, title: str, slug: str) -> dict:
-    """Create {slug}-featured.jpg (900x752) with high-quality generation."""
+    """Create {slug}-featured.jpg (1200x675) with high-quality generation."""
     ym = datetime.now().strftime("%Y/%m")
     out_dir = UNISCOLIAN_UPLOADS_DIR / ym
     out_dir.mkdir(parents=True, exist_ok=True)
