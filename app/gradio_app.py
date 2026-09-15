@@ -10,7 +10,7 @@ import gradio as gr
 from app.config import APP_TITLE, GRADIO_SERVER_NAME, GRADIO_SERVER_PORT, BLOGS_DIR, UNISCOLIAN_ROOT, logger
 from core.exporters.markdown_converter import slugify
 from core.exporters.pdf_exporter import blog_to_pdf
-from core.exporters.static_exporter import export_post_to_uniscolian
+from core.exporters.static_exporter import export_post_to_uniscolian, parse_update_target
 from core.interactive import InteractiveSession
 from core.post_processors.product_detector import (
     detect_product_sections,
@@ -623,9 +623,6 @@ async def export_refined_to_uniscolian_action(thread_id: str):
         if isinstance(kw_data, dict):
             keywords = [k.get("keyword", "") for k in kw_data.get("keywords", []) if isinstance(k, dict)][:5]
         
-        import asyncio
-        from core.exporters.static_exporter import export_post_to_uniscolian
-        
         # Add suffix to topic to differentiate from original
         refined_topic = f"{topic} (Refined)" if topic else "Refined Blog"
         
@@ -903,12 +900,17 @@ async def generate_all_product_images_action(thread_id: str):
         return f"*❌ Generation failed: {e}*", [], []
 
 
-async def publish_to_uniscolian_action(thread_id: str):
-    """One-click publish: Image + Links + Sitemap + HTML Export."""
+async def publish_to_uniscolian_action(thread_id: str, update_url: str = ""):
+    """One-click publish or update: Image + Links + Sitemap + HTML Export."""
     if not thread_id:
         return "❌ No active session. Please generate a blog first."
         
     try:
+        try:
+            parsed = parse_update_target(update_url)
+        except ValueError as e:
+            return f"❌ {e}"
+
         session = await get_session()
         snap = await session.get_state(thread_id)
         
@@ -956,10 +958,18 @@ async def publish_to_uniscolian_action(thread_id: str):
             product_affiliate_links=product_links,
             top_pick_product=top_pick,
             product_images_map=product_images_map,
+            update_slug=parsed or None,
         )
         
-        # Build rich success message
-        msg = ["## 🚀 Successfully Published to Uniscolian!"]
+        if result.get("error"):
+            return f"❌ {result['error']}"
+
+        is_updated = result.get("updated", False)
+        if is_updated:
+            msg = [f"## 🔄 Post UPDATED: /{result['slug']}/ (sitemap untouched)"]
+        else:
+            msg = ["## 🚀 Successfully Published to Uniscolian!"]
+            
         msg.append(f"✅ **Post URL:** `/{result['slug']}/`")
         msg.append(f"📊 **Word Count:** {result['word_count']} words | ⏱️ **Read Time:** {result['read_time']} min")
         
@@ -1124,6 +1134,10 @@ def create_ui():
                     download_pdf_btn = gr.Button("📄 Download PDF", interactive=False)
                 download_file = gr.File(label="📁 Your downloaded file", interactive=False)
 
+                update_url_input = gr.Textbox(
+                    label="🔄 Update Existing Post (optional)",
+                    placeholder="Paste post URL or slug e.g. best-budget-laptop-2026 — leave EMPTY to publish as NEW post",
+                    value="")
                 with gr.Row():
                     publish_uniscolian_btn = gr.Button(
                         "🚀 Publish to Uniscolian Website", 
@@ -1356,7 +1370,7 @@ def create_ui():
         download_pdf_btn.click(fn=download_pdf_action, inputs=[thread_id_state], outputs=[download_file])
         publish_uniscolian_btn.click(
             fn=publish_to_uniscolian_action,
-            inputs=[thread_id_state],
+            inputs=[thread_id_state, update_url_input],
             outputs=[publish_status_md]
         )
 
