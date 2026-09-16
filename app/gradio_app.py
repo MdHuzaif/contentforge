@@ -687,10 +687,10 @@ async def enhance_detection_action(thread_id: str, current_sections: list):
 
 async def load_detected_products_action(thread_id: str):
     """Load detected products from state into editable table."""
-    if not thread_id:
-        return [], "*❌ No active session.*"
-    
     try:
+        if not thread_id:
+            return [], "*❌ No active session.*"
+        
         session = await get_session()
         snap = await session.get_state(thread_id)
         
@@ -732,26 +732,27 @@ async def load_detected_products_action(thread_id: str):
         return table_data, msg
         
     except Exception as e:
+        logger.error(f"Load detected products failed: {e}", exc_info=True)
         return [], f"*❌ Load failed: {str(e)}*"
 
 
 async def save_affiliate_links_action(thread_id: str, table_data: list):
     """Save affiliate links back to state."""
-    if not thread_id:
-        return "*❌ No active session.*"
-    
-    # Convert DataFrame to list if needed (Gradio returns DataFrame)
-    if hasattr(table_data, 'values'):
-        table_data = table_data.values.tolist()
-    elif hasattr(table_data, 'empty'):
-        if table_data.empty:
-            return "*❌ No data to save.*"
-        table_data = table_data.values.tolist()
-    
-    if not table_data:
-        return "*❌ No data to save.*"
-    
     try:
+        if not thread_id:
+            return "*❌ No active session.*"
+        
+        # Convert DataFrame to list if needed (Gradio returns DataFrame)
+        if hasattr(table_data, 'values'):
+            table_data = table_data.values.tolist()
+        elif hasattr(table_data, 'empty'):
+            if table_data.empty:
+                return "*❌ No data to save.*"
+            table_data = table_data.values.tolist()
+        
+        if not table_data:
+            return "*❌ No data to save.*"
+        
         session = await get_session()
         snap = await session.get_state(thread_id)
         
@@ -762,8 +763,8 @@ async def save_affiliate_links_action(thread_id: str, table_data: list):
         product_links = {}
         for row in table_data:
             if len(row) >= 3 and row[0] and row[2]:
-                product_name = row[0].strip()
-                amazon_url = row[2].strip()
+                product_name = str(row[0]).strip()
+                amazon_url = str(row[2]).strip()
                 if product_name and amazon_url:
                     # Accept ANY link the user provides - no validation
                     product_links[product_name] = amazon_url.strip()
@@ -801,9 +802,7 @@ async def save_affiliate_links_action(thread_id: str, table_data: list):
         return msg
     
     except Exception as e:
-        logger.error(f"Save affiliate links failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Save affiliate links failed: {e}", exc_info=True)
         return f"*❌ Save failed: {str(e)}*"
 
 
@@ -1211,11 +1210,12 @@ def create_ui():
                 )
                 
                 detected_products_display = gr.Dataframe(
-                    headers=["Product Name", "Section", "Amazon Link (paste here)"],
-                    label="Detected Products — Add Affiliate Links",
-                    interactive=[False, False, True],  # Only link column is editable
-                    datatype=["str", "str", "str"],
+                    headers=["Product Name", "Section", "Affiliate Link"],
                     col_count=(3, "fixed"),
+                    datatype=["str", "str", "str"],
+                    wrap=True,
+                    interactive=True,
+                    label="📦 Detected Products — Paste Amazon Links Below"
                 )
                 
                 with gr.Row():

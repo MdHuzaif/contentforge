@@ -199,10 +199,10 @@ def test_exported_html_placement():
     print("-" * 80)
     assert html.count('class="product-image"') == 6, f"Expected exactly 6 product-image classes, found {html.count('class=\"product-image\"')}"
 
-    # R1b: Assert every product image is wrapped exactly like the featured image wrapper
-    figure_pattern = r'<figure class="wp-block-image aligncenter size-full"><img[^>]*class="product-image"[^>]*style="width:100%;height:auto;max-height:500px;object-fit:cover;">\s*</figure>'
+    # R1b: Assert every product image is wrapped in square card style with is-resized and 450px dimensions
+    figure_pattern = r'<figure class="wp-block-image aligncenter size-full is-resized"><img[^>]*width="450"[^>]*height="377"[^>]*class="product-image"[^>]*style="width:450px;max-width:100%;height:auto;">\s*</figure>'
     figure_matches = list(re.finditer(figure_pattern, html))
-    assert len(figure_matches) == 6, f"Expected 6 product image figure wrappers matching featured style, found {len(figure_matches)}"
+    assert len(figure_matches) == 6, f"Expected 6 product image figure wrappers matching square card style, found {len(figure_matches)}"
 
     all_h2 = list(re.finditer(r'<h2[^>]*>.*?</h2>', html, re.DOTALL | re.IGNORECASE))
     h2_match = next((m for m in all_h2 if "Buying Guide" in m.group(0)), None)

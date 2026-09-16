@@ -226,7 +226,14 @@ def export_post_to_uniscolian(
     featured = featured_image_filename or f"{slug}-featured.jpg"
     featured_rel = f"wp-content/uploads/{uploads_ym}/{featured}"
 
-    img_info = generate_featured_image(topic, title, slug) if generate_image else {"status": "skipped", "source": "none", "relative_path": featured_rel, "file_exists": False}
+    force_regen = is_update
+    if generate_image:
+        try:
+            img_info = generate_featured_image(topic, title, slug, force_regenerate=force_regen)
+        except TypeError:
+            img_info = generate_featured_image(topic, title, slug)
+    else:
+        img_info = {"status": "skipped", "source": "none", "relative_path": featured_rel, "file_exists": False, "regenerated": False}
 
     if not img_info.get("file_exists"):
         images.insert(0, {"filename": featured, "relative_path": featured_rel,

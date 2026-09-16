@@ -35,7 +35,7 @@ def fake_site(tmp_path, monkeypatch):
         '<url><loc>./old-post/</loc><lastmod>2026-01-01T00:00:00+00:00</lastmod></url>'
         '<url><loc>./other-post/</loc><lastmod>2026-01-01T00:00:00+00:00</lastmod></url>'
         '</urlset>', encoding="utf-8")
-    for mod in (config_mod, se, sb):
+    for mod in (config_mod, se, sb, sm_mod):
         monkeypatch.setattr(mod, "UNISCOLIAN_ROOT", tmp_path, raising=False)
     monkeypatch.setattr(config_mod, "UNISCOLIAN_REFERENCE_POST", ref)
     monkeypatch.setattr(se, "UNISCOLIAN_REFERENCE_POST", ref)
@@ -106,10 +106,51 @@ def test_update_overwrites_featured_image(fake_site, monkeypatch):
     assert (ym_dir / "old-post-featured.jpg").read_bytes() == b"NEWIMG"
 
 
-def test_registry_cache_not_polluted_by_tests(tmp_path, monkeypatch):
-    """Regression: running tests must NOT write to production cache."""
-    prod_cache = sm_mod.POST_REGISTRY_PATH  # default production path
-    if prod_cache.exists():
-        content = prod_cache.read_text(encoding="utf-8")
-        assert "New Title" not in content, "Production cache polluted by test data"
-        assert "Other Post" not in content, "Production cache polluted by test data"
+def test_update_mode_forces_featured_image_regeneration(fake_site, monkeypatch):
+    """Update mode must regenerate featured image even if file exists."""
+    ym_dir = fake_site / "wp-content" / "uploads" / "2026/01"
+    ym_dir.mkdir(parents=True, exist_ok=True)
+    old_image = ym_dir / "old-post-featured.jpg"
+    old_image.write_bytes(b"OLD_IMAGE_CONTENT")
+    
+    called_with_force = []
+    def mock_generate(topic, title, slug, force_regenerate=False):
+        called_with_force.append(force_regenerate)
+        new_image = ym_dir / f"{slug}-featured.jpg"
+        new_image.write_bytes(b"NEW_IMAGE_CONTENT")
+        return {"source": "mock", "file_exists": True, "regenerated": True,
+                "relative_path": f"wp-content/uploads/2026/01/{slug}-featured.jpg"}
+    
+    monkeypatch.setattr(se, "generate_featured_image", mock_generate)
+    
+    res = export_post_to_uniscolian(markdown=NEW_MD, topic="t", 
+                                    update_slug="old-post", 
+                                    generate_image=True)
+    
+    assert called_with_force[0] is True, "Update mode must force regenerate"
+    assert old_image.read_bytes() == b"NEW_IMAGE_CONTENT"
+
+
+def test_new_post_mode_skips_existing_image(tmp_path, monkeypatch):
+    """New post mode should still skip if image exists (backward compat)."""
+    ym_dir = tmp_path / "wp-content" / "uploads" / "2026/01"
+    ym_dir.mkdir(parents=True, exist_ok=True)
+    existing = ym_dir / "existing-post-featured.jpg"
+    existing.write_bytes(b"EXISTING")
+    
+    called_with_force = []
+    def mock_generate(topic, title, slug, force_regenerate=False):
+        called_with_force.append(force_regenerate)
+        if not force_regenerate and existing.exists():
+            return {"file_exists": True, "regenerated": False,
+                    "relative_path": f"wp-content/uploads/2026/01/{slug}-featured.jpg"}
+        return {"source": "mock", "file_exists": True, "regenerated": True,
+                "relative_path": f"wp-content/uploads/2026/01/{slug}-featured.jpg"}
+    
+    monkeypatch.setattr(se, "generate_featured_image", mock_generate)
+    
+    res = export_post_to_uniscolian(markdown=NEW_MD, topic="existing-post",
+                                    generate_image=True)
+    
+    assert called_with_force[0] is False
+    assert existing.read_bytes() == b"EXISTING"

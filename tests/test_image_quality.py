@@ -33,7 +33,7 @@ def test_image_dimensions():
     from core.exporters.image_generator import GEN_W, GEN_H
     assert GEN_W == 1200 and GEN_H == 675
     from core.exporters.product_image_generator import GEN_W as P_GEN_W, GEN_H as P_GEN_H
-    assert P_GEN_W == 1200 and P_GEN_H == 675
+    assert P_GEN_W == 900 and P_GEN_H == 752
 
 if __name__ == "__main__":
     test_enhanced_prompt()

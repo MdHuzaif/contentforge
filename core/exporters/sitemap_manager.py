@@ -90,27 +90,18 @@ def _extract_title(html: str) -> str:
 
 
 def build_registry(root: Path = UNISCOLIAN_ROOT, force: bool = False) -> Dict[str, str]:
-    import app.config as config_mod
-    actual_root = root if root is not None else UNISCOLIAN_ROOT
-    reg_path = POST_REGISTRY_PATH
-    if actual_root != config_mod.UNISCOLIAN_ROOT:
-        reg_path = actual_root / "_template" / "post_registry.json"
-
-    if reg_path.exists() and not force:
+    if POST_REGISTRY_PATH.exists() and not force:
         try:
-            cached = json.loads(reg_path.read_text(encoding="utf-8"))
-            # Validate every entry exists on disk
+            cached = json.loads(POST_REGISTRY_PATH.read_text(encoding="utf-8"))
             validated = {}
             for slug, title in cached.items():
-                if (actual_root / slug / "index.html").exists():
+                if (root / slug / "index.html").exists():
                     validated[slug] = title
-                else:
-                    logger.debug("Skipping stale cache entry: %s", slug)
             if validated:
                 return validated
         except Exception:
             pass
-        # Fall through to fresh build if cache is empty/corrupt
+    
     # Static pages that should NOT be in the blog registry
     STATIC_PAGE_SLUGS = {
         "about-us", "about", "contact", "privacy-policy", "terms-and-conditions",
@@ -118,17 +109,19 @@ def build_registry(root: Path = UNISCOLIAN_ROOT, force: bool = False) -> Dict[st
         "home", "blog", "shop", "cart", "checkout", "my-account",
     }
     
-    registry: Dict[str, str] = {}
-    for slug in sorted(existing_slugs(actual_root)):
+    # Build fresh registry from disk
+    registry = {}
+    for slug in sorted(existing_slugs(root)):
         if slug.lower() in STATIC_PAGE_SLUGS:
-            continue  # Skip static pages
-        f = actual_root / slug / "index.html"
+            continue
+        f = root / slug / "index.html"
         if f.exists():
             title = _extract_title(f.read_text(encoding="utf-8", errors="ignore")[:300_000])
             if title:
                 registry[slug] = title
-    reg_path.parent.mkdir(parents=True, exist_ok=True)
-    reg_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False), encoding="utf-8")
+    
+    POST_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    POST_REGISTRY_PATH.write_text(json.dumps(registry, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Post registry built: %d posts", len(registry))
     return registry
 

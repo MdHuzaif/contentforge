@@ -15,11 +15,11 @@ import io
 
 logger = logging.getLogger("contentforge")
 
-GEN_W, GEN_H = 1200, 675
+GEN_W, GEN_H = 900, 752
 
 POLLINATIONS_URL = (
     "https://image.pollinations.ai/prompt/{prompt}"
-    "?width=1200&height=675&model=flux&nologo=true&seed=7"
+    "?width=900&height=752&model=flux&nologo=true&seed=7"
 )
 
 GENERIC_HEADINGS = {
@@ -100,7 +100,7 @@ def _cloudflare_workers_ai(prompt: str) -> Tuple[Optional[bytes], str]:
         return None, "none"
 
 
-def _pollinations_product(prompt: str, width: int = 1200, height: int = 675) -> Tuple[Optional[bytes], str]:
+def _pollinations_product(prompt: str, width: int = 900, height: int = 752) -> Tuple[Optional[bytes], str]:
     """Generate image using Pollinations API with parameterized dimensions."""
     try:
         url = POLLINATIONS_URL.format(prompt=quote(prompt))
@@ -117,7 +117,7 @@ def _pollinations_product(prompt: str, width: int = 1200, height: int = 675) -> 
         return None, "none"
 
 
-def generate_product_image_bytes(prompt: str, width: int = 1200, height: int = 675) -> Tuple[Optional[bytes], str]:
+def generate_product_image_bytes(prompt: str, width: int = 900, height: int = 752) -> Tuple[Optional[bytes], str]:
     """Chain: Cloudflare FIRST, Pollinations SECOND. Returns (bytes, source)."""
     ensure_env_loaded()
     
@@ -261,10 +261,11 @@ def inject_product_images_into_markdown(markdown: str, images_map: Dict[str, str
 
             if matched_rel_path:
                 tag = (
-                    '<figure class="wp-block-image aligncenter size-full">'
-                    f'<img decoding="async" src="{matched_rel_path}" srcset="{matched_rel_path} 2x" '
+                    '<figure class="wp-block-image aligncenter size-full is-resized">'
+                    f'<img decoding="async" width="450" height="377" src="{matched_rel_path}" '
+                    f'srcset="{matched_rel_path} 2x" '
                     f'alt="{matched_name} product photo" class="product-image" loading="lazy" '
-                    'style="width:100%;height:auto;max-height:500px;object-fit:cover;">'
+                    'style="width:450px;max-width:100%;height:auto;">'
                     '</figure>'
                 )
                 result_lines.append("")

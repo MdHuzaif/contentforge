@@ -43,9 +43,10 @@ def _build_enhanced_prompt(title: str) -> str:
     
     # Core prompt structure
     base = f"high quality {style} for a technology blog article about: {title}"
+    composition = "16:9 aspect ratio, widescreen landscape orientation, horizontal composition, centered subject"
     negative = "no text, no words, no letters, no watermark, no logo, no signatures"
     
-    return f"{base}, {details}. {negative}"
+    return f"{base}, {details}, {composition}. {negative}"
 
 
 def _hf_space_api(prompt_text: str) -> Optional[bytes]:
@@ -231,7 +232,7 @@ def _pil_fallback(title: str, path: Path) -> None:
     img.save(path, "JPEG", quality=88)
 
 
-def generate_featured_image(topic: str, title: str, slug: str) -> dict:
+def generate_featured_image(topic: str, title: str, slug: str, force_regenerate: bool = False) -> dict:
     """Create {slug}-featured.jpg (1200x675) with high-quality generation."""
     ym = datetime.now().strftime("%Y/%m")
     out_dir = UNISCOLIAN_UPLOADS_DIR / ym
@@ -240,13 +241,14 @@ def generate_featured_image(topic: str, title: str, slug: str) -> dict:
     rel = f"wp-content/uploads/{ym}/{slug}-featured.jpg"
     
     # Check if already exists
-    if path.exists():
+    if path.exists() and not force_regenerate:
         logger.info("Featured image already exists: %s", path)
         return {
             "status": "exists",
             "source": "manual",
             "relative_path": rel,
-            "file_exists": True
+            "file_exists": True,
+            "regenerated": False
         }
     
     # Build enhanced prompt
@@ -289,20 +291,24 @@ def generate_featured_image(topic: str, title: str, slug: str) -> dict:
         im = _crop_resize(im, GEN_W, GEN_H)
         im.save(path, "JPEG", quality=90)
         
-        logger.info("Featured image generated (%s): %s", source, path)
+        action_str = "regenerated" if force_regenerate else "generated"
+        logger.info("Featured image %s (%s): %s", action_str, source, path)
         return {
-            "status": "generated",
+            "status": action_str,
             "source": source,
             "relative_path": rel,
-            "file_exists": True
+            "file_exists": True,
+            "regenerated": True
         }
     
     # 5. Fallback to PIL
     logger.warning("All APIs failed. Using offline PIL fallback.")
     _pil_fallback(title, path)
+    action_str = "regenerated" if force_regenerate else "generated"
     return {
-        "status": "generated",
+        "status": action_str,
         "source": "pil",
         "relative_path": rel,
-        "file_exists": True
+        "file_exists": True,
+        "regenerated": True
     }

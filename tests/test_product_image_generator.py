@@ -320,5 +320,36 @@ def test_export_kwarg_additive():
 
 def test_crop_resize_preserves_aspect():
     im = Image.new("RGB", (1024, 1024), color="red")
-    resized = _crop_resize(im, 1200, 675)
-    assert resized.size == (1200, 675)
+    resized = _crop_resize(im, 900, 752)
+    assert resized.size == (900, 752)
+
+
+def test_product_gen_dimensions_are_square():
+    from core.exporters.product_image_generator import GEN_W, GEN_H
+    assert (GEN_W, GEN_H) == (900, 752), "Product images must be square-ish 900x752"
+
+
+def test_featured_gen_dimensions_are_wide():
+    from core.exporters.image_generator import GEN_W, GEN_H
+    assert (GEN_W, GEN_H) == (1200, 675), "Featured images must stay 16:9 1200x675"
+
+
+def test_product_figure_tag_uses_square_card_style():
+    markdown = "## Product A\nContent."
+    images_map = {"Product A": "img.jpg"}
+    res = inject_product_images_into_markdown(markdown, images_map)
+    assert 'is-resized' in res
+    assert 'width="450"' in res
+    assert 'height="377"' in res
+    assert 'style="width:450px;max-width:100%;height:auto;"' in res
+
+
+def test_featured_figure_tag_stays_wide():
+    from core.exporters.static_exporter import export_post_to_uniscolian
+    # Check that featured figure uses 100% width style
+    # We can inspect static_exporter code or test helper
+    html_content = 'style="width:100%;height:auto;max-height:500px;object-fit:cover;"'
+    from core.exporters import static_exporter
+    import inspect
+    source = inspect.getsource(static_exporter)
+    assert 'style="width:100%;height:auto;max-height:500px;object-fit:cover;"' in source
