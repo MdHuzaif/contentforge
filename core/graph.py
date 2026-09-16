@@ -419,8 +419,8 @@ def _generate_product_subprompts(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Generate structured sub-prompts for product recommendation content.
     
     Creates:
-    - H2: Introduction
     - H2: At a Glance comparison table
+    - H2: Introduction
     - H2: Detailed reviews intro
     - H3: One detailed review per selected product
     - H2: Buying guide
@@ -447,47 +447,8 @@ def _generate_product_subprompts(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     product_count = len(selected_products)
     
     sub_prompts = []
-    
-    # === 1. H2: Introduction ===
-    sub_prompts.append({
-        "id": 0,
-        "title": f"Introduction: Your Guide to the Best {category.title()} Options in 2026",
-        "type": "h2_intro",
-        "word_target": 600,
-        "status": "pending",
-        "primary_keyword": primary_kw,
-        "secondary_keywords": secondary_kws,
-        "prompt": f"""Write a compelling 500-700 word introduction for an article about '{topic}'.
 
-STRUCTURE:
-1. HOOK (100 words): Start with a surprising statistic, common pain point, or 
-   provocative question about {category} shopping in 2026.
-2. CONTEXT (150 words): Explain why choosing the right {category} matters now — 
-   mention recent tech advances, market changes, or user needs.
-3. WHAT READERS WILL LEARN (150 words): Preview the {product_count} products reviewed, 
-   the testing methodology, and the tier breakdown (premium/mid-range/budget).
-4. CREDIBILITY (100 words): Briefly mention how products were selected (competitor 
-   analysis, real user signals, expert testing).
-5. TRANSITION (100 words): Tease the "At a Glance" table and detailed reviews below.
-
-SEO REQUIREMENTS:
-- Naturally weave in primary keyword: '{primary_kw}'
-- Include 2-3 secondary keywords: {secondary_kw_text}
-- Use conversational expert tone ("we tested", "in our experience")
-- End with a clear transition sentence
-
-DO NOT include any product names in detail here — save those for the reviews below.
-DO NOT include any buy buttons or pricing.""",
-        "key_points": [
-            "Hook with statistic or pain point",
-            "Why this topic matters in 2026",
-            f"Preview of {product_count} products reviewed",
-            "Testing methodology credibility",
-            "Transition to detailed reviews"
-        ],
-    })
-    
-    # === 2. H2: At a Glance Comparison Table ===
+    # === 1. H2: At a Glance Comparison Table ===
     sub_prompts.append({
         "id": 1,
         "title": "At a Glance: Quick Comparison of Top Picks",
@@ -525,6 +486,47 @@ Do NOT include any buy buttons or pricing information.""",
             "Quick recommendations by use case"
         ],
     })
+
+
+    # === 2. H2: Introduction ===
+    sub_prompts.append({
+        "id": 0,
+        "title": f"Introduction: Your Guide to the Best {category.title()} Options in 2026",
+        "type": "h2_intro",
+        "word_target": 600,
+        "status": "pending",
+        "primary_keyword": primary_kw,
+        "secondary_keywords": secondary_kws,
+        "prompt": f"""Write a compelling 500-700 word introduction for an article about '{topic}'.
+
+STRUCTURE:
+1. HOOK (100 words): Start with a surprising statistic, common pain point, or 
+   provocative question about {category} shopping in 2026.
+2. CONTEXT (150 words): Explain why choosing the right {category} matters now — 
+   mention recent tech advances, market changes, or user needs.
+3. WHAT READERS WILL LEARN (150 words): Preview the {product_count} products reviewed, 
+   the testing methodology, and the tier breakdown (premium/mid-range/budget).
+4. CREDIBILITY (100 words): Briefly mention how products were selected (competitor 
+   analysis, real user signals, expert testing).
+5. TRANSITION (100 words): Tease the detailed product reviews that follow below.
+
+SEO REQUIREMENTS:
+- Naturally weave in primary keyword: '{primary_kw}'
+- Include 2-3 secondary keywords: {secondary_kw_text}
+- Use conversational expert tone ("we tested", "in our experience")
+- End with a clear transition sentence
+
+DO NOT include any product names in detail here — save those for the reviews below.
+DO NOT include any buy buttons or pricing.""",
+        "key_points": [
+            "Hook with statistic or pain point",
+            "Why this topic matters in 2026",
+            f"Preview of {product_count} products reviewed",
+            "Testing methodology credibility",
+            "Transition to detailed reviews"
+        ],
+    })
+    
     
     # === 3. H2: Detailed Product Reviews Intro ===
     sub_prompts.append({
