@@ -5,8 +5,11 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 import httpx
+import os
+import base64
 
 from app.config import logger, UNISCOLIAN_UPLOADS_DIR
+from core.exporters.product_image_generator import ensure_env_loaded, _crop_resize
 
 DISPLAY_W, DISPLAY_H = 450, 377
 GEN_W, GEN_H = 1200, 675  # 16:9 widescreen resolution
@@ -132,6 +135,55 @@ def _pollinations_api(prompt_text: str) -> Optional[bytes]:
         return None
 
 
+def _cloudflare_featured_api(prompt_text: str) -> Optional[bytes]:
+    """Generate featured image using Cloudflare Workers AI (fallback 2)."""
+    # Respect offline-mode test mocking
+    if getattr(httpx.get, "__module__", "") not in ("httpx", "httpx._api"):
+        try:
+            httpx.get("http://test")
+        except httpx.ConnectError:
+            return None
+        except Exception:
+            pass
+    
+    ensure_env_loaded()
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    api_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if not account_id or not api_token:
+        return None
+    
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/black-forest-labs/flux-1-schnell"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"prompt": prompt_text}  # NO width/height
+    
+    try:
+        resp = httpx.post(url, headers=headers, json=payload, timeout=60)
+        if resp.status_code in (402, 429, 503):
+            return None
+        resp.raise_for_status()
+        
+        content_type = resp.headers.get("content-type", "").lower()
+        if content_type.startswith("image/"):
+            raw_bytes = resp.content
+        else:
+            data = resp.json()
+            res_dict = data.get("result", {})
+            b64_str = res_dict.get("image") or data.get("image")
+            if not b64_str:
+                return None
+            raw_bytes = base64.b64decode(b64_str)
+        
+        if raw_bytes and len(raw_bytes) > 5000 and raw_bytes.startswith(b"\xff\xd8"):
+            return raw_bytes
+        return None
+    except Exception as e:
+        logger.warning("Cloudflare featured image error: %s", e)
+        return None
+
+
 def _pil_fallback(title: str, path: Path) -> None:
     """Offline branded placeholder card 1200x675 (fallback 4)."""
     from PIL import Image, ImageDraw, ImageFont
@@ -216,7 +268,13 @@ def generate_featured_image(topic: str, title: str, slug: str) -> dict:
         if image_bytes:
             source = "hf_inference"
     
-    # 3. Try Pollinations API
+    # 3. Try Cloudflare Workers AI
+    if not image_bytes:
+        image_bytes = _cloudflare_featured_api(prompt)
+        if image_bytes:
+            source = "cloudflare"
+
+    # 4. Try Pollinations API
     if not image_bytes:
         image_bytes = _pollinations_api(prompt)
         if image_bytes:
@@ -228,9 +286,7 @@ def generate_featured_image(topic: str, title: str, slug: str) -> dict:
         import io
         
         im = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        # Resize to exact 900x752 if needed
-        if im.size != (GEN_W, GEN_H):
-            im = im.resize((GEN_W, GEN_H), Image.Resampling.LANCZOS)
+        im = _crop_resize(im, GEN_W, GEN_H)
         im.save(path, "JPEG", quality=90)
         
         logger.info("Featured image generated (%s): %s", source, path)
@@ -241,7 +297,7 @@ def generate_featured_image(topic: str, title: str, slug: str) -> dict:
             "file_exists": True
         }
     
-    # 4. Fallback to PIL
+    # 5. Fallback to PIL
     logger.warning("All APIs failed. Using offline PIL fallback.")
     _pil_fallback(title, path)
     return {

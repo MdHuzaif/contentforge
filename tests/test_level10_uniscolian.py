@@ -140,10 +140,10 @@ def test_build_registry(fake_site):
     }
     assert config_mod.POST_REGISTRY_PATH.exists()
 
-    # Delete one html file, call again without force -> should still return both from cached registry json
+    # Delete one html file, call again without force -> should drop stale cache entry
     (fake_site / "old-post-b" / "index.html").unlink()
     reg_cached = build_registry(fake_site, force=False)
-    assert "old-post-b" in reg_cached
+    assert "old-post-b" not in reg_cached
 
 
 def test_export_unique_slug(fake_site):

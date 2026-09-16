@@ -21,6 +21,35 @@ from core.exporters.sidebar_related import inject_sidebar_related
 from core.exporters.engagement import ENGAGEMENT_BLOCK
 
 
+SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def parse_update_target(url_or_slug: str) -> str:
+    if not url_or_slug or not str(url_or_slug).strip():
+        return ""
+    s = str(url_or_slug).strip()
+    s = s.split('?')[0].split('#')[0].strip()
+    if not s:
+        return ""
+    s = s.replace('\\', '/')
+    s = re.sub(r'^https?://', '', s, flags=re.I)
+    s = re.sub(r'^www\.', '', s, flags=re.I)
+    parts = [p for p in s.split('/') if p]
+    if '..' in parts:
+        raise ValueError(f"Invalid post URL or slug (path traversal): {url_or_slug!r}")
+    parts = [p for p in parts if p != '.']
+    if parts and '.' in parts[0]:
+        parts.pop(0)
+    if parts and parts[-1].lower() == 'index.html':
+        parts.pop()
+    if not parts:
+        raise ValueError(f"Invalid post URL or slug: {url_or_slug!r}")
+    slug = parts[-1].lower()
+    if not SLUG_RE.match(slug):
+        raise ValueError(f"Invalid post URL or slug: {url_or_slug!r}")
+    return slug
+
+
 def slugify_slug(text: str) -> str:
     t = text.lower().strip()
     t = re.sub(r'[^a-z0-9\s-]', '', t)
@@ -93,6 +122,7 @@ def export_post_to_uniscolian(
     product_affiliate_links: Optional[Dict[str, str]] = None,
     top_pick_product: Optional[str] = None,
     product_images_map: Optional[Dict[str, str]] = None,
+    update_slug: Optional[str] = None,
     **kwargs,
 ) -> Dict:
     # === INJECT PRODUCT IMAGES (if map provided) ===
@@ -124,11 +154,37 @@ def export_post_to_uniscolian(
 
     now = datetime.now()
     uploads_ym = now.strftime("%Y/%m")
-    base_slug = slugify_slug(topic)
-    if avoid_duplicates:
-        slug = ensure_unique_slug(base_slug, existing_slugs(UNISCOLIAN_ROOT))
+
+    parsed_update_slug = parse_update_target(update_slug or "")
+    is_update = bool(parsed_update_slug)
+    if is_update:
+        target = UNISCOLIAN_ROOT / parsed_update_slug
+        if not (target / "index.html").exists():
+            return {
+                "error": f"Post not found: /{parsed_update_slug}/ — nothing was changed.",
+                "updated": False,
+                "slug": parsed_update_slug,
+                "slug_renamed": False,
+                "sitemap_updated": False,
+                "path": "",
+                "url": f"/{parsed_update_slug}/",
+                "word_count": 0,
+                "read_time": 0,
+                "expected_images": [],
+                "image": {},
+                "related": [],
+            }
+        slug = parsed_update_slug
+        slug_renamed = False
+        update_sitemap_flag = False
     else:
-        slug = base_slug
+        base_slug = slugify_slug(topic)
+        if avoid_duplicates:
+            slug = ensure_unique_slug(base_slug, existing_slugs(UNISCOLIAN_ROOT))
+        else:
+            slug = base_slug
+        slug_renamed = slug != base_slug
+        update_sitemap_flag = update_sitemap
 
     # Title from first H1, else topic
     m = re.search(r'^#\s+(.+)$', markdown, re.M)
@@ -246,7 +302,11 @@ def export_post_to_uniscolian(
     # After exporting post
     create_category_page(category_name, category_slug, UNISCOLIAN_ROOT)
 
-    sitemap_updated = add_to_sitemap(UNISCOLIAN_ROOT, slug) if update_sitemap else False
+    if is_update:
+        build_registry(UNISCOLIAN_ROOT, force=True)
+        sitemap_updated = False
+    else:
+        sitemap_updated = add_to_sitemap(UNISCOLIAN_ROOT, slug) if update_sitemap_flag else False
 
     return {
         "slug": slug,
@@ -257,8 +317,9 @@ def export_post_to_uniscolian(
         "expected_images": images,
         "image": img_info,
         "sitemap_updated": sitemap_updated,
-        "slug_renamed": slug != base_slug,
+        "slug_renamed": slug_renamed if not is_update else False,
         "related": [{"slug": s, "title": t} for s, t in related_picks],
+        "updated": is_update,
     }
 
 
