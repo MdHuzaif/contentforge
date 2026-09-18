@@ -9,18 +9,13 @@ sys.path.insert(0, str(project_root))
 from app.gradio_app import launch
 from app.config import logger
 
-# Verify Gradio version at startup (catches HF pip issues)
-import gradio as gr
-
-_gradio_version = tuple(int(x) for x in gr.__version__.split(".")[:2])
-if _gradio_version >= (5, 20):
-    logger.warning(
-        "⚠️ Gradio %s detected (known schema bug). "
-        "If API errors occur, pin gradio==5.12.0 in requirements.txt",
-        gr.__version__
-    )
-else:
-    logger.info("✅ Gradio %s (stable schema handling)", gr.__version__)
+# Version check — show_api=False handles schema bugs in all versions
+try:
+    _gradio_version = tuple(int(x) for x in gr.__version__.split(".")[:2])
+    logger.info("✅ Gradio %s loaded (show_api=False active for schema safety)", 
+                gr.__version__)
+except Exception:
+    logger.info("✅ Gradio loaded (version check skipped)")
 
 if __name__ == "__main__":
     try:
