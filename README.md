@@ -48,3 +48,26 @@ ContentForge AI now supports an interactive 4-phase workflow:
 - **SQLite checkpointer**: State persists across sessions
 - **Global session management**: Single InteractiveSession handles all threads
 
+## 🚀 Deployment to Hugging Face
+
+### Required Environment Variables
+
+Set these in HF Space Settings → Variables and secrets:
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `GITHUB_TOKEN` | Secret 🔒 | GitHub PAT with `repo` scope |
+| `UNISCOLIAN_REPO_URL` | Variable 📝 | `https://github.com/MdHuzaif/uniscolian-website.git` |
+| `CLOUDFLARE_ACCOUNT_ID` | Variable 📝 | Your Cloudflare account ID |
+| `CLOUDFLARE_API_TOKEN` | Secret 🔒 | Cloudflare API token |
+| `GEMINI_API_KEY` | Secret 🔒 | Google Gemini API key |
+| `UNISCOLIAN_ROOT` | Variable 📝 | `/tmp/uniscolian-website` (for HF Space) |
+| `SITE_BASE_URL` | Variable 📝 | `https://uniscolian.com` |
+
+### Auto-Push Behavior
+
+- **New posts**: Auto-pushed to GitHub → Netlify auto-deploys
+- **Updated posts**: NOT auto-pushed (minor fixes only)
+- **Local dev**: Auto-push skipped if credentials not set
+
+

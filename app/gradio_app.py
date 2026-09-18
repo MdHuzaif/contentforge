@@ -991,6 +991,19 @@ async def publish_to_uniscolian_action(thread_id: str, update_url: str = ""):
         # Sitemap
         msg.append(f"🗺️ **Sitemap Updated:** {'Yes' if result.get('sitemap_updated') else 'No (already exists)'}")
         
+        # Show GitHub push result
+        push_info = result.get("github_push", {})
+        if push_info.get("pushed"):
+            msg.append("🚀 **Auto-pushed to GitHub** (Netlify will auto-deploy)")
+        elif push_info.get("reason") == "No credentials":
+            msg.append("ℹ️ *Local mode: GitHub auto-push skipped (no token)*")
+        elif push_info.get("reason") == "No changes":
+            msg.append("ℹ️ *No changes to push to GitHub*")
+        elif push_info.get("error"):
+            msg.append(f"⚠️ *GitHub push failed: {push_info['error']}*")
+        elif push_info.get("reason") == "skipped":
+            msg.append("ℹ️ *GitHub push skipped (update mode)*")
+
         if product_links:
             msg.append(f"\n💰 **Affiliate Buttons Added:** {len(product_links)} products")
             for name in product_links.keys():

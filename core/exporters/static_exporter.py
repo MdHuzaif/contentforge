@@ -1,6 +1,8 @@
 """Export an assembled Markdown blog into the Uniscolian static site."""
 from __future__ import annotations
+import os
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -106,6 +108,105 @@ def create_category_page(category_name: str, category_slug: str, output_dir: Pat
     
     category_index.write_text(category_html, encoding='utf-8')
     logger.info(f"✅ Created category page: {category_index}")
+
+
+def push_to_github(uniscolian_root: Path, 
+                   commit_message: str = "Auto-publish new post") -> dict:
+    """Auto-push uniscolian-website changes to GitHub.
+    
+    Used in Hugging Face deployment to trigger Netlify auto-deploy.
+    Gracefully skips if credentials not set (local dev).
+    
+    Returns dict with 'pushed' (bool) and either 'message' or 'error'.
+    """
+    github_token = os.environ.get("GITHUB_TOKEN")
+    repo_url = os.environ.get("UNISCOLIAN_REPO_URL", "")
+    
+    if not github_token or not repo_url:
+        logger.warning("⚠️ GitHub credentials not set, skipping push")
+        return {"pushed": False, "reason": "No credentials"}
+    
+    try:
+        authenticated_url = repo_url.replace(
+            "https://github.com/",
+            f"https://{github_token}@github.com/"
+        )
+        
+        original_dir = os.getcwd()
+        os.chdir(uniscolian_root)
+        
+        try:
+            # Git init if needed
+            if not (uniscolian_root / ".git").exists():
+                subprocess.run(["git", "init"], check=True, capture_output=True)
+                subprocess.run(["git", "branch", "-M", "main"], 
+                              check=True, capture_output=True)
+            
+            # Remote setup
+            result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                subprocess.run(
+                    ["git", "remote", "add", "origin", authenticated_url],
+                    check=True, capture_output=True
+                )
+            else:
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", authenticated_url],
+                    check=True, capture_output=True
+                )
+            
+            # Git config (bot identity)
+            subprocess.run(["git", "config", "user.email", "bot@contentforge.ai"], 
+                          check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "ContentForge Bot"],
+                          check=True, capture_output=True)
+            
+            # Stage all changes
+            subprocess.run(["git", "add", "-A"], check=True, capture_output=True)
+            
+            # Check if there's anything to commit
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True, text=True
+            )
+            if not status.stdout.strip():
+                logger.info("ℹ️ No changes to commit")
+                return {"pushed": False, "reason": "No changes"}
+            
+            # Commit
+            subprocess.run(
+                ["git", "commit", "-m", commit_message],
+                check=True, capture_output=True
+            )
+            
+            # Push
+            push_result = subprocess.run(
+                ["git", "push", "-u", "origin", "main", "--force"],
+                capture_output=True, text=True, timeout=120
+            )
+            
+            if push_result.returncode == 0:
+                logger.info("✅ Successfully force-pushed to GitHub!")
+                return {"pushed": True, "message": push_result.stdout}
+            else:
+                logger.error(f"❌ Push failed: {push_result.stderr}")
+                return {"pushed": False, "error": push_result.stderr}
+        
+        finally:
+            os.chdir(original_dir)
+    
+    except FileNotFoundError:
+        logger.error("❌ git command not found. Install git.")
+        return {"pushed": False, "error": "git not installed"}
+    except subprocess.TimeoutExpired:
+        logger.error("⏱️ Push timeout (>120s)")
+        return {"pushed": False, "error": "Push timeout"}
+    except Exception as e:
+        logger.error(f"❌ Push error: {e}")
+        return {"pushed": False, "error": str(e)}
 
 
 def export_post_to_uniscolian(
@@ -315,6 +416,14 @@ def export_post_to_uniscolian(
     else:
         sitemap_updated = add_to_sitemap(UNISCOLIAN_ROOT, slug) if update_sitemap_flag else False
 
+    # === NEW: Auto-push to GitHub (only for new posts, not updates) ===
+    github_push_result = {"pushed": False, "reason": "skipped"}
+    if not is_update:
+        github_push_result = push_to_github(
+            UNISCOLIAN_ROOT,
+            commit_message=f"feat: add new post - {slug}"
+        )
+
     return {
         "slug": slug,
         "path": str(post_file),
@@ -327,6 +436,7 @@ def export_post_to_uniscolian(
         "slug_renamed": slug_renamed if not is_update else False,
         "related": [{"slug": s, "title": t} for s, t in related_picks],
         "updated": is_update,
+        "github_push": github_push_result,
     }
 
 
