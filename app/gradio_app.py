@@ -1471,7 +1471,7 @@ def launch():
     """Launch the Gradio app."""
     demo = create_ui()
     demo.launch(
-        server_name="127.0.0.1",  # Changed from 0.0.0.0 to fix localhost access
+        server_name=GRADIO_SERVER_NAME,  # ✅ Dynamic (0.0.0.0 on HF)
         server_port=GRADIO_SERVER_PORT,
         share=False,
         allowed_paths=[UNISCOLIAN_ROOT],

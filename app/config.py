@@ -51,7 +51,10 @@ PROMPT_REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
 
 # ============ UI / Server Controls ============
 APP_TITLE = "ContentForge AI"
-GRADIO_SERVER_NAME = os.environ.get("GRADIO_SERVER_NAME", "127.0.0.1")
+_is_hf_space = bool(os.environ.get("SPACE_ID") or os.environ.get("HF_SPACE_ID"))
+GRADIO_SERVER_NAME = os.environ.get(
+    "GRADIO_SERVER_NAME", "0.0.0.0" if _is_hf_space else "127.0.0.1"
+)
 GRADIO_SERVER_PORT = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
 
 # ===== Uniscolian Static Site Integration (Level 8) =====

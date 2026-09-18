@@ -3,8 +3,11 @@ title: ContentForge AI
 emoji: 🎯
 colorFrom: green
 colorTo: blue
-sdk: docker
-app_port: 7861
+sdk: gradio
+sdk_version: 5.20.0
+python_version: 3.10.14
+app_file: main.py
+suggested_hardware: zero-a100-small
 pinned: false
 ---
 
