@@ -4,7 +4,6 @@ emoji: 🎯
 colorFrom: green
 colorTo: blue
 sdk: gradio
-sdk_version: 5.20.0
 python_version: 3.10.14
 app_file: main.py
 suggested_hardware: zero-a10g

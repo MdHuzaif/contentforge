@@ -1471,10 +1471,13 @@ def launch():
     """Launch the Gradio app."""
     demo = create_ui()
     demo.launch(
-        server_name=GRADIO_SERVER_NAME,  # ✅ Dynamic (0.0.0.0 on HF)
+        server_name=GRADIO_SERVER_NAME,
         server_port=GRADIO_SERVER_PORT,
         share=False,
         allowed_paths=[UNISCOLIAN_ROOT],
+        show_api=False,           # Disable API page to avoid schema crash
+        show_error=True,          # Show errors in UI for debugging
+        quiet=False,              # Keep logs verbose on HF
     )
 
 
