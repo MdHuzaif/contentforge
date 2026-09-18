@@ -7,7 +7,7 @@ sdk: gradio
 sdk_version: 6.28.0
 python_version: 3.10.13
 app_file: main.py
-suggested_hardware: zero-a10-small
+suggested_hardware: zero-a10g
 pinned: false
 ---
 
