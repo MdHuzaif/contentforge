@@ -1,6 +1,6 @@
 # ===== Core UI =====
-gradio>=5.0,<6.0
-gradio_client>=0.17.0
+gradio>=5.20.0
+gradio-client>=0.17.0
 
 # ===== Config / env =====
 python-dotenv>=1.0.1
@@ -20,6 +20,11 @@ langgraph>=0.2.50
 langgraph-checkpoint>=2.0.0
 langgraph-checkpoint-sqlite>=2.0.0
 langchain-core>=0.3.0
+
+# ===== HF / Utils =====
+huggingface-hub>=0.20.0
+markdown>=3.0.0
+Pillow>=10.0.0
 
 # ===== Export (Level 7) =====
 xhtml2pdf>=0.2.11
