@@ -1,7 +1,9 @@
 # ===== Core UI =====
 # NOTE: Gradio version is managed by HF Space ZeroGPU base image (6.x).
 # Do NOT pin gradio here - causes ResolutionImpossible build error.
-# Using show_api=False in launch() bypasses JSON schema bugs in 6.x.
+
+# ===== HF ZeroGPU =====
+spaces>=0.30.0
 
 # ===== Config / env =====
 python-dotenv>=1.0.1

@@ -1470,15 +1470,28 @@ def create_ui():
 def launch():
     """Launch the Gradio app."""
     demo = create_ui()
-    demo.launch(
-        server_name=GRADIO_SERVER_NAME,
-        server_port=GRADIO_SERVER_PORT,
-        share=False,
-        allowed_paths=[UNISCOLIAN_ROOT],
-        show_error=True,          # Show errors in UI for debugging
-        quiet=False,              # Keep logs verbose on HF
-        theme=gr.themes.Soft(),   # ✅ Moved from Blocks() constructor
-    )
+    
+    # Detect HF environment for SSR mode
+    import os
+    _on_hf = bool(os.environ.get("SPACE_ID") or os.environ.get("HF_SPACE_ID"))
+    
+    launch_kwargs = {
+        "server_name": GRADIO_SERVER_NAME,
+        "server_port": GRADIO_SERVER_PORT,
+        "share": False,
+        "allowed_paths": [UNISCOLIAN_ROOT],
+        "show_error": True,
+        "quiet": False,
+        "theme": gr.themes.Soft(),
+    }
+    
+    # SSR mode causes Node.js restart issues on HF ZeroGPU
+    # Only disable if parameter exists (Gradio version compatibility)
+    try:
+        demo.launch(ssr_mode=False, **launch_kwargs)
+    except TypeError:
+        # Older/newer Gradio without ssr_mode parameter
+        demo.launch(**launch_kwargs)
 
 
 if __name__ == "__main__":

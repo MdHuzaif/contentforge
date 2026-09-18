@@ -1,26 +1,39 @@
+"""ContentForge AI - Entry point."""
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
-# Add the project root to Python path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(Path(__file__).parent))
 
-# Import and run the Gradio application
-from app.gradio_app import launch
+import gradio as gr
 from app.config import logger
 
-# Version check — show_api=False handles schema bugs in all versions
+# Version check
 try:
-    _gradio_version = tuple(int(x) for x in gr.__version__.split(".")[:2])
-    logger.info("✅ Gradio %s loaded (show_api=False active for schema safety)", 
-                gr.__version__)
+    logger.info("✅ Gradio %s loaded", gr.__version__)
 except Exception:
-    logger.info("✅ Gradio loaded (version check skipped)")
+    logger.info("✅ Gradio loaded")
+
+# CRITICAL: Import GPU stub so HF ZeroGPU detects @spaces.GPU function
+try:
+    from app.gpu_stub import gpu_heartbeat  # noqa: F401
+    logger.info("✅ GPU stub loaded (HF ZeroGPU compatibility)")
+except Exception as e:
+    logger.warning("GPU stub load skipped: %s", e)
+
+# Site repo sync (HF only)
+try:
+    from core.exporters.repo_sync import ensure_site_repo
+    ensure_site_repo()
+except Exception as e:
+    logger.warning("Site repo sync skipped: %s", e)
+
+# Import and build demo (global variable needed for HF hot reload)
+from app.gradio_app import create_ui, launch
+
+# Global demo for Gradio hot reload mode (HF uses this)
+demo = create_ui()
 
 if __name__ == "__main__":
-    try:
-        from core.exporters.repo_sync import ensure_site_repo
-        ensure_site_repo()
-    except Exception as e:
-        logger.warning("Site repo sync skipped: %s", e)
     launch()
