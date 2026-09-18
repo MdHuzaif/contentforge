@@ -1027,7 +1027,7 @@ async def publish_to_uniscolian_action(thread_id: str, update_url: str = ""):
 
 def create_ui():
     """Build the 3-tab Gradio interface."""
-    with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title=APP_TITLE) as demo:
         gr.Markdown(f"# 🎯 {APP_TITLE}\n**Interactive Step-by-Step SEO Blog Generator**")
         
         # Hidden state for thread_id
@@ -1055,7 +1055,7 @@ def create_ui():
                             headers=["Keyword", "Intent", "Difficulty"],
                             datatype=["str", "str", "str"],
                             row_count=(0, "dynamic"),
-                            col_count=(3, "fixed"),
+                            column_count=(3, "fixed"),
                             label="Target Keywords",
                         )
                     
@@ -1065,7 +1065,7 @@ def create_ui():
                             headers=["Metric", "Value"],
                             datatype=["str", "str"],
                             row_count=(0, "dynamic"),
-                            col_count=(2, "fixed"),
+                            column_count=(2, "fixed"),
                             label="Competitor Analysis",
                         )
                 
@@ -1084,7 +1084,7 @@ def create_ui():
                     label="Selected Products for Detailed Review",
                     interactive=False,
                     datatype=["number", "str", "str", "str", "number", "str"],
-                    col_count=(6, "fixed"),
+                    column_count=(6, "fixed"),
                 )
                 
                 generate_prompts_btn = gr.Button(
@@ -1101,7 +1101,7 @@ def create_ui():
                     headers=["Section", "Title", "Type", "Word Target", "Status"],
                     datatype=["str", "str", "str", "str", "str"],
                     row_count=(0, "dynamic"),
-                    col_count=(5, "fixed"),
+                    column_count=(5, "fixed"),
                     label="Sub-Prompts (Auto-Split for Large Sections)",
                     interactive=False,
                 )
@@ -1224,7 +1224,7 @@ def create_ui():
                 
                 detected_products_display = gr.Dataframe(
                     headers=["Product Name", "Section", "Affiliate Link"],
-                    col_count=(3, "fixed"),
+                    column_count=(3, "fixed"),
                     datatype=["str", "str", "str"],
                     wrap=True,
                     interactive=True,
@@ -1475,9 +1475,9 @@ def launch():
         server_port=GRADIO_SERVER_PORT,
         share=False,
         allowed_paths=[UNISCOLIAN_ROOT],
-        show_api=False,           # Disable API page to avoid schema crash
         show_error=True,          # Show errors in UI for debugging
         quiet=False,              # Keep logs verbose on HF
+        theme=gr.themes.Soft(),   # ✅ Moved from Blocks() constructor
     )
 
 
