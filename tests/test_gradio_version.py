@@ -1,42 +1,38 @@
+"""Verify Gradio 6.x compatibility."""
 import pytest
 
-def test_dataframe_helper_exists():
-    """_dataframe_cols helper must exist."""
-    from app.gradio_app import _dataframe_cols
-    result = _dataframe_cols(3)
-    assert isinstance(result, dict)
-    keys = set(result.keys())
-    assert keys in ({"col_count"}, {"column_count"})
-    value = list(result.values())[0]
-    assert value == (3, "fixed")
 
-def test_dataframe_helper_handles_zero():
-    """_dataframe_cols(0) should return empty dict."""
-    from app.gradio_app import _dataframe_cols
-    assert _dataframe_cols(0) == {}
+def test_gradio_version_is_6x():
+    """Verify Gradio 6.x is installed."""
+    import gradio as gr
+    version_tuple = tuple(int(x) for x in gr.__version__.split(".")[:2])
+    assert version_tuple >= (6, 0), (
+        f"Gradio {gr.__version__} installed. Must be 6.x for ZeroGPU compatibility. "
+        "Run: pip install --upgrade gradio"
+    )
 
-def test_no_direct_column_params():
-    """No DataFrame should have col_count= or column_count= directly."""
+
+def test_all_dataframes_use_column_count():
+    """All DataFrames must use column_count (Gradio 6.x standard)."""
     from pathlib import Path
     app_file = Path(__file__).parent.parent / "app" / "gradio_app.py"
     content = app_file.read_text(encoding="utf-8")
     
-    lines = content.split('\n')
-    in_dataframe_def = False
+    # Should NOT have old col_count parameter
+    assert "col_count=" not in content, (
+        "Found col_count= (Gradio 5.x). Use column_count= instead."
+    )
     
-    for i, line in enumerate(lines):
-        if 'gr.DataFrame(' in line or 'gr.Dataframe(' in line:
-            in_dataframe_def = True
-        
-        if in_dataframe_def:
-            if ('col_count=' in line or 'column_count=' in line) and '_dataframe_cols' not in line:
-                pytest.fail(
-                    f"Line {i+1}: Direct col_count/column_count found. "
-                    f"Use **_dataframe_cols(N) instead.\n{line.strip()}"
-                )
-            
-            if ')' in line and not line.strip().startswith('#'):
-                in_dataframe_def = False
+    # Should NOT have version helper
+    assert "_dataframe_cols" not in content, (
+        "Found _dataframe_cols helper. Remove it and use column_count directly."
+    )
+    
+    # Should have column_count in DataFrames
+    assert "column_count=" in content, (
+        "No column_count= found. All DataFrames must use column_count parameter."
+    )
+
 
 def test_requirements_does_not_pin_gradio():
     """requirements.txt must NOT pin gradio version."""
@@ -47,7 +43,10 @@ def test_requirements_does_not_pin_gradio():
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith("gradio==") or stripped.startswith("gradio ==="):
-            pytest.fail(f"requirements.txt must not pin gradio (found: {stripped})")
+            pytest.fail(
+                f"requirements.txt must not pin gradio (found: {stripped})"
+            )
+
 
 def test_gradio_import_works():
     """Gradio should import successfully."""
@@ -57,8 +56,9 @@ def test_gradio_import_works():
         setattr(gr, "launch", lambda *args, **kwargs: None)
     assert hasattr(gr, "launch")
 
+
 def test_app_starts_without_error():
-    """create_ui() must work on current Gradio version."""
+    """create_ui() must work on Gradio 6.x."""
     from app.gradio_app import create_ui
     demo = create_ui()
     assert demo is not None

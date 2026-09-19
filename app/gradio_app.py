@@ -24,27 +24,6 @@ from core.post_processors.product_refiner import (
 )
 
 
-# ===== Gradio Version Compatibility =====
-try:
-    _GRADIO_VERSION = tuple(int(x) for x in gr.__version__.split(".")[:2])
-    _USE_COLUMN_COUNT = _GRADIO_VERSION >= (6, 0)
-except (ValueError, AttributeError):
-    _USE_COLUMN_COUNT = True
-
-def _dataframe_cols(n: int) -> dict:
-    """Return correct parameter for DataFrame column count based on Gradio version.
-    
-    Gradio 5.x: col_count
-    Gradio 6.x: column_count (col_count deprecated)
-    """
-    if n <= 0:
-        return {}
-    
-    if _USE_COLUMN_COUNT:
-        return {"column_count": (n, "fixed")}
-    return {"col_count": (n, "fixed")}
-
-
 # Global session manager (single global session with SQLite checkpointer)
 _global_session: Optional[InteractiveSession] = None
 _session_lock = asyncio.Lock()
@@ -1077,7 +1056,7 @@ def create_ui():
                             datatype=["str", "str", "str"],
                             row_count=(0, "dynamic"),
                             label="Target Keywords",
-                            **_dataframe_cols(3)
+                            column_count=(3, "fixed")
                         )
                     
                     with gr.Column():
@@ -1087,7 +1066,7 @@ def create_ui():
                             datatype=["str", "str"],
                             row_count=(0, "dynamic"),
                             label="Competitor Analysis",
-                            **_dataframe_cols(2)
+                            column_count=(2, "fixed")
                         )
                 
                 gr.Markdown("#### Gap Analysis")
@@ -1105,7 +1084,7 @@ def create_ui():
                     label="Selected Products for Detailed Review",
                     interactive=False,
                     datatype=["number", "str", "str", "str", "number", "str"],
-                    **_dataframe_cols(6)
+                    column_count=(6, "fixed")
                 )
                 
                 generate_prompts_btn = gr.Button(
@@ -1124,7 +1103,7 @@ def create_ui():
                     row_count=(0, "dynamic"),
                     label="Sub-Prompts (Auto-Split for Large Sections)",
                     interactive=False,
-                    **_dataframe_cols(5)
+                    column_count=(5, "fixed")
                 )
                 
                 prompt_summary = gr.Markdown("*Generate prompts first*")
@@ -1249,7 +1228,7 @@ def create_ui():
                     wrap=True,
                     interactive=True,
                     label="📦 Detected Products — Paste Amazon Links Below",
-                    **_dataframe_cols(3)
+                    column_count=(3, "fixed")
                 )
                 
                 with gr.Row():
