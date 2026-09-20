@@ -416,13 +416,16 @@ def export_post_to_uniscolian(
     else:
         sitemap_updated = add_to_sitemap(UNISCOLIAN_ROOT, slug) if update_sitemap_flag else False
 
-    # === NEW: Auto-push to GitHub (only for new posts, not updates) ===
-    github_push_result = {"pushed": False, "reason": "skipped"}
-    if not is_update:
-        github_push_result = push_to_github(
-            UNISCOLIAN_ROOT,
-            commit_message=f"feat: add new post - {slug}"
-        )
+    # === Auto-push to GitHub (new posts AND updates) ===
+    if is_update:
+        commit_message = f"update: modify post - {slug}"
+    else:
+        commit_message = f"feat: add new post - {slug}"
+
+    github_push_result = push_to_github(
+        UNISCOLIAN_ROOT,
+        commit_message=commit_message
+    )
 
     return {
         "slug": slug,

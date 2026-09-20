@@ -1002,7 +1002,7 @@ async def publish_to_uniscolian_action(thread_id: str, update_url: str = ""):
         elif push_info.get("error"):
             msg.append(f"⚠️ *GitHub push failed: {push_info['error']}*")
         elif push_info.get("reason") == "skipped":
-            msg.append("ℹ️ *GitHub push skipped (update mode)*")
+            msg.append("ℹ️ *GitHub push skipped*")
 
         if product_links:
             msg.append(f"\n💰 **Affiliate Buttons Added:** {len(product_links)} products")

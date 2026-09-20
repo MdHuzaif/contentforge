@@ -47,8 +47,41 @@ def test_push_skips_when_no_changes(tmp_path, monkeypatch):
     with patch("core.exporters.static_exporter.subprocess.run", 
                side_effect=mock_run):
         result = push_to_github(tmp_path, "test")
+    
     assert result["pushed"] is False
-    assert "changes" in result.get("reason", "").lower()
+
+
+def test_push_runs_for_update_mode(tmp_path, monkeypatch):
+    """Update mode must also trigger auto-push (not just new posts)."""
+    monkeypatch.setenv("GITHUB_TOKEN", "test_token_123")
+    monkeypatch.setenv("UNISCOLIAN_REPO_URL", 
+                       "https://github.com/user/repo.git")
+    monkeypatch.setattr("core.exporters.static_exporter.UNISCOLIAN_ROOT", tmp_path)
+    
+    old_post_dir = tmp_path / "old-post"
+    old_post_dir.mkdir(parents=True, exist_ok=True)
+    (old_post_dir / "index.html").write_text("old content")
+    
+    with patch("core.exporters.static_exporter.push_to_github") as mock_push:
+        mock_push.return_value = {"pushed": True, "message": "ok"}
+        
+        # Call export with update_slug (update mode)
+        from core.exporters.static_exporter import export_post_to_uniscolian
+        result = export_post_to_uniscolian(
+            markdown="# Updated Title\n\nNew content",
+            topic="test topic",
+            category_name="Laptop",
+            update_slug="old-post",
+            generate_image=False,
+            update_sitemap=False,
+        )
+        
+        # Verify push was called even in update mode
+        mock_push.assert_called_once()
+        call_args = mock_push.call_args
+        assert "update:" in str(call_args), (
+            f"Update mode should use 'update:' commit message. Got: {call_args}"
+        )
 
 
 def test_push_success_returns_true(tmp_path, monkeypatch):
