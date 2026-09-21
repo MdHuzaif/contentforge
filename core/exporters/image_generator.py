@@ -32,8 +32,8 @@ def _build_enhanced_prompt(title: str) -> str:
         style = "professional product photography, studio lighting, clean background"
         details = "sharp focus, high detail, 8k resolution"
     elif any(word in title_lower for word in ["guide", "tutorial", "how to"]):
-        style = "clean infographic style, modern design, professional layout"
-        details = "minimalist, educational, clear visual hierarchy"
+        style = "futuristic tech poster look, modern design, professional layout"
+        details = "minimalist,educational,blank empty label plates with absolutely no writing"
     elif any(word in title_lower for word in ["review", "comparison", "best"]):
         style = "editorial photography, magazine style, professional composition"
         details = "balanced lighting, sharp details, commercial quality"
