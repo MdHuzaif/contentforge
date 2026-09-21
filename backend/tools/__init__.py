@@ -14,6 +14,7 @@ from backend.tools.serp_scraper import (
     get_top_results,
     search_bing,
     search_duckduckgo,
+    search_web,
 )
 from backend.tools.seo_tools import (
     analyze_meta_description,
@@ -31,6 +32,7 @@ from backend.tools.seo_tools import (
 
 __all__ = [
     "get_top_results",
+    "search_web",
     "search_duckduckgo",
     "search_bing",
     "analyze_html",
