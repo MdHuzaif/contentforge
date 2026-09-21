@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 import urllib.parse
 import base64
@@ -65,8 +66,70 @@ def _decode_bing_redirect_url(bing_url: str) -> str:
         return bing_url
 
 
-async def search_duckduckgo(query: str, max_results: int = 10) -> List[Dict[str, str]]:
+async def search_tavily(query: str, max_results: int = 10, **kwargs) -> List[Dict[str, str]]:
+    """Search via Tavily API (primary source - official API, no IP blocking).
+
+    Basic depth = 1 credit per request (free tier: 1000 credits/month).
+    Converts 'site:x.com q' queries into include_domains=["x.com"].
+    """
+    if "n" in kwargs:
+        max_results = kwargs["n"]
+
+    api_key = os.environ.get("TAVILY_API_KEY", "").strip()
+    if not api_key:
+        logger.debug("Tavily skipped: no TAVILY_API_KEY")
+        return []
+
+    # Convert site: prefix to include_domains (better results + saves credits)
+    include_domains = None
+    clean_query = query
+    m = re.match(r"site:([a-z0-9.\-]+)\s+(.*)", query, re.IGNORECASE)
+    if m:
+        include_domains = [m.group(1)]
+        clean_query = m.group(2)
+
+    body: Dict[str, Any] = {
+        "query": clean_query,
+        "search_depth": "basic",       # 1 credit (NEVER use advanced=2)
+        "max_results": max_results,
+        "include_answer": False,       # save tokens/credits
+    }
+    if include_domains:
+        body["include_domains"] = include_domains
+
+    results: List[Dict[str, str]] = []
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                "https://api.tavily.com/search",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        for r in data.get("results", []):
+            url = r.get("url", "")
+            title = clean_html(r.get("title", ""))
+            snippet = clean_html(r.get("content", ""))
+            if url and title:
+                results.append({"title": title, "url": url, "snippet": snippet})
+            if len(results) >= max_results:
+                break
+
+        logger.info("Tavily search for '%s' returned %d results", query, len(results))
+    except Exception as e:
+        logger.warning("Tavily search error for query '%s': %s", query, e)
+    return results
+
+
+async def search_duckduckgo(query: str, max_results: int = 10, **kwargs) -> List[Dict[str, str]]:
     """Search DuckDuckGo HTML and return a list of result dicts."""
+    if "n" in kwargs:
+        max_results = kwargs["n"]
     results: List[Dict[str, str]] = []
     url = "https://html.duckduckgo.com/html/"
     headers = {
@@ -124,8 +187,10 @@ async def search_duckduckgo(query: str, max_results: int = 10) -> List[Dict[str,
     return results
 
 
-async def search_ddg_lite(query: str, max_results: int = 6) -> List[Dict[str, str]]:
+async def search_ddg_lite(query: str, max_results: int = 6, **kwargs) -> List[Dict[str, str]]:
     """Search DuckDuckGo Lite - simpler HTML, less likely to be blocked."""
+    if "n" in kwargs:
+        max_results = kwargs["n"]
     url = "https://lite.duckduckgo.com/lite/"
     results: List[Dict[str, str]] = []
     try:
@@ -166,8 +231,10 @@ async def search_ddg_lite(query: str, max_results: int = 6) -> List[Dict[str, st
         return []
 
 
-async def search_bing(query: str, max_results: int = 10) -> List[Dict[str, str]]:
+async def search_bing(query: str, max_results: int = 10, **kwargs) -> List[Dict[str, str]]:
     """Search Bing and return a list of result dicts."""
+    if "n" in kwargs:
+        max_results = kwargs["n"]
     results: List[Dict[str, str]] = []
     encoded_query = urllib.parse.quote_plus(query)
     url = f"https://www.bing.com/search?q={encoded_query}"
@@ -235,7 +302,16 @@ async def search_bing(query: str, max_results: int = 10) -> List[Dict[str, str]]
 
 
 async def _async_search_web(query: str, num_results: int = 10) -> list:
-    # Try DuckDuckGo first (most reliable)
+    """Chain: Tavily → DuckDuckGo → Bing."""
+    try:
+        results = await search_tavily(query, num_results)
+        if results:
+            logger.info("✅ Search succeeded via Tavily: %d results", len(results))
+            return results[:num_results]
+        logger.debug("Tavily returned 0 results, trying DuckDuckGo")
+    except Exception as e:
+        logger.warning("Tavily raised exception: %s — trying DuckDuckGo", e)
+
     try:
         results = await search_duckduckgo(query, num_results)
         if results:
@@ -245,7 +321,6 @@ async def _async_search_web(query: str, num_results: int = 10) -> list:
     except Exception as e:
         logger.warning("DuckDuckGo raised exception: %s — trying Bing", e)
     
-    # Fallback to Bing
     try:
         results = await search_bing(query, num_results)
         if results:
@@ -260,9 +335,9 @@ async def _async_search_web(query: str, num_results: int = 10) -> list:
 
 
 def search_web(query: str, num_results: int = 10) -> list:
-    """Search using DuckDuckGo and Bing (proven reliable).
+    """Search using Tavily, DuckDuckGo and Bing.
     
-    Chain: DuckDuckGo → Bing (if DDG fails)
+    Chain: Tavily → DuckDuckGo → Bing
     """
     try:
         return asyncio.run(_async_search_web(query, num_results))
@@ -277,16 +352,17 @@ def search_web(query: str, num_results: int = 10) -> list:
 
 
 async def get_top_results(query: str, max_results: int = 10) -> List[Dict[str, str]]:
-    """Try DuckDuckGo first; fall back to DDG Lite; fall back to Bing if empty; return trimmed results."""
-    results = await search_duckduckgo(query, max_results=max_results)
+    """Chain: Tavily → DuckDuckGo → DDG Lite → Bing."""
+    results = await search_tavily(query, max_results=max_results)
+    if not results:
+        logger.info(f"Tavily empty/failed, trying DuckDuckGo for '{query}'")
+        results = await search_duckduckgo(query, max_results=max_results)
     if not results:
         logger.info(f"DDG HTML failed, trying DDG Lite for '{query}'")
         results = await search_ddg_lite(query, max_results=max_results)
-
     if not results:
         logger.info(f"DDG Lite also failed, falling back to Bing for '{query}'")
         results = await search_bing(query, max_results=max_results)
-
     trimmed = results[:max_results]
     logger.info("get_top_results for '%s' found %d results total", query, len(trimmed))
     return trimmed
