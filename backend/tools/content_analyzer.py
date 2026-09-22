@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -239,20 +240,91 @@ def analyze_html(html: str, url: str = "") -> Dict[str, Any]:
     }
 
 
-async def fetch_and_analyze(url: str) -> Optional[Dict[str, Any]]:
-    """Fetch URL via HTTPX and return analysis dict or None on exception."""
+async def _httpx_fetch(url: str, timeout: float = 15.0) -> Optional[str]:
+    """Lightweight HTTP fetch (Layer 1, free)."""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36"
     }
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
-            html_content = response.text
-        return analyze_html(html_content, url=url)
+            return response.text
     except Exception as e:
-        logger.warning("Failed to fetch and analyze URL '%s': %s", url, e)
+        logger.warning("httpx fetch failed for %s: %s", url, e)
         return None
+
+
+_FIRECRAWL_TIMEOUT = 45.0
+
+
+def _firecrawl_enabled() -> bool:
+    return bool(os.environ.get("FIRECRAWL_API_KEY", "").strip())
+
+
+def _firecrawl_endpoints() -> List[str]:
+    """v2 first, v1 fallback; env override possible."""
+    custom = os.environ.get("FIRECRAWL_API_URL", "").strip()
+    if custom:
+        return [custom.rstrip("/")]
+    return ["https://api.firecrawl.dev/v2/scrape",
+            "https://api.firecrawl.dev/v1/scrape"]
+
+
+def _is_info_rich(info: Dict[str, Any]) -> bool:
+    """True when parsed page has real article content (not a JS shell)."""
+    return bool(info) and (
+        info.get("word_count", 0) >= 200 or info.get("h2_count", 0) >= 2
+    )
+
+
+async def _firecrawl_fetch(url: str) -> Optional[str]:
+    """Rescue fetch via Firecrawl browser rendering (1 credit per success)."""
+    key = os.environ.get("FIRECRAWL_API_KEY", "").strip()
+    if not key:
+        return None
+    body = {"url": url, "formats": ["html"], "onlyMainContent": True}
+    headers = {"Authorization": f"Bearer {key}",
+               "Content-Type": "application/json"}
+    endpoints = _firecrawl_endpoints()
+    for i, endpoint in enumerate(endpoints):
+        try:
+            async with httpx.AsyncClient(timeout=_FIRECRAWL_TIMEOUT) as client:
+                r = await client.post(endpoint, headers=headers, json=body)
+                if r.status_code in (404, 410) and i < len(endpoints) - 1:
+                    logger.debug("Firecrawl %s deprecated, trying next", endpoint)
+                    continue
+                r.raise_for_status()
+                data = (r.json() or {}).get("data") or {}
+                html = data.get("html") or ""
+                if len(html) > 200:
+                    return html
+                logger.warning("Firecrawl returned thin html for %s", url)
+                return None
+        except Exception as e:
+            logger.warning("Firecrawl fetch failed via %s for %s: %s",
+                           endpoint, url, e)
+            continue
+    return None
+
+
+async def fetch_and_analyze(url: str) -> Optional[Dict[str, Any]]:
+    """Fetch chain: httpx (free) -> Firecrawl rescue (credits) -> None."""
+    html = await _httpx_fetch(url)
+    if html:
+        info = analyze_html(html, url=url)
+        # Without firecrawl key: keep EXACT old behavior (accept any page)
+        if _is_info_rich(info) or not _firecrawl_enabled():
+            return info
+    if _firecrawl_enabled():
+        fc = await _firecrawl_fetch(url)
+        if fc:
+            logger.info("Fetched %s via firecrawl (httpx blocked/empty)", url)
+            return analyze_html(fc, url=url)
+    logger.warning("All fetch layers failed for %s", url)
+    return None
 
 
 def aggregate_metrics(analyses: List[Dict[str, Any]]) -> Dict[str, Any]:
