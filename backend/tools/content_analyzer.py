@@ -11,26 +11,70 @@ from app.config import logger
 from backend.tools.serp_scraper import clean_html
 
 
+_PARSER: Optional[str] = None
+
+
+def _get_parser() -> str:
+    global _PARSER
+    if _PARSER is None:
+        try:
+            import lxml  # noqa: F401
+            _PARSER = "lxml"
+        except Exception:
+            _PARSER = "html.parser"
+    return _PARSER
+
+
+def _soup(html_content: str):
+    from bs4 import BeautifulSoup
+    return BeautifulSoup(html_content or "", _get_parser())
+
+
+_NOISE = ["script", "style", "noscript", "template", "svg", "form", "button"]
+_CHROME = ["nav", "footer", "aside", "header"]
+
+
+def _main_node(soup):
+    """Locate main article content container."""
+    import re as _re
+    for tag, attrs in [
+        ("article", {}),
+        ("main", {}),
+        ("div", {"id": _re.compile(r"(content|main|article|post)", _re.I)}),
+        ("div", {"class": _re.compile(r"(entry-content|post-content|article-body|content-body)", _re.I)}),
+    ]:
+        node = soup.find(tag, attrs)
+        if node:
+            return node
+    return soup.body or soup
+
+
 def extract_headings(html: str) -> Dict[str, List[str]]:
-    """Extract text of all <h1>, <h2>, <h3> tags."""
+    """Extract text of all <h1>, <h2>, <h3> tags, ignoring nav/footer/aside/header."""
     if not html:
         return {"h1": [], "h2": [], "h3": []}
-    h1 = [clean_html(m) for m in re.findall(r'<h1[^>]*>(.*?)</h1>', html, re.DOTALL | re.IGNORECASE)]
-    h2 = [clean_html(m) for m in re.findall(r'<h2[^>]*>(.*?)</h2>', html, re.DOTALL | re.IGNORECASE)]
-    h3 = [clean_html(m) for m in re.findall(r'<h3[^>]*>(.*?)</h3>', html, re.DOTALL | re.IGNORECASE)]
-    return {
-        "h1": [x for x in h1 if x],
-        "h2": [x for x in h2 if x],
-        "h3": [x for x in h3 if x],
-    }
+    soup = _soup(html)
+    result: Dict[str, List[str]] = {"h1": [], "h2": [], "h3": []}
+    for tag in soup.find_all(re.compile(r"^h[1-6]$", re.I)):
+        if tag.find_parent(_CHROME):
+            continue
+        text = tag.get_text(" ", strip=True)
+        if text:
+            name = tag.name.lower()
+            if name in result:
+                result[name].append(text)
+    return result
 
 
 def extract_main_text(html: str) -> str:
     """Remove script, style, nav, footer, header blocks and all tags; return cleaned visible text."""
     if not html:
         return ""
-    cleaned = re.sub(r'(?is)<(script|style|nav|footer|header).*?>.*?</\1>', ' ', html)
-    return clean_html(cleaned)
+    soup = _soup(html)
+    node = _main_node(soup)
+    for t in node.find_all(_NOISE + _CHROME):
+        t.decompose()
+    return node.get_text(" ", strip=True)
 
 
 def count_words(text: str) -> int:
@@ -78,17 +122,20 @@ def get_meta_info(html: str) -> Dict[str, Any]:
             "has_canonical": False,
         }
 
-    title_match = re.search(r'<title[^>]*>(.*?)</title>', html, re.DOTALL | re.IGNORECASE)
-    title = clean_html(title_match.group(1)) if title_match else ""
+    soup = _soup(html)
+    title_tag = soup.find("title")
+    title = title_tag.get_text(" ", strip=True) if title_tag else ""
 
-    desc_match = re.search(r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']', html, re.IGNORECASE)
-    if not desc_match:
-        desc_match = re.search(r'<meta[^>]*content=["\']([^"\']*)["\'][^>]*name=["\']description["\']', html, re.IGNORECASE)
-    meta_desc = desc_match.group(1) if desc_match else ""
+    meta_desc = ""
+    meta_tag = soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)}) or \
+               soup.find("meta", attrs={"property": re.compile(r"^description$", re.I)}) or \
+               soup.find("meta", attrs={"name": re.compile(r"description", re.I)})
+    if meta_tag and meta_tag.get("content"):
+        meta_desc = meta_tag["content"].strip()
 
-    has_meta_desc = bool(meta_desc.strip())
-    has_schema = bool(re.search(r'application/ld\+json', html, re.IGNORECASE) or re.search(r'itemtype=', html, re.IGNORECASE))
-    has_canonical = bool(re.search(r'<link[^>]*rel=["\']canonical["\']', html, re.IGNORECASE))
+    has_meta_desc = bool(meta_desc)
+    has_schema = bool(soup.find("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}) or soup.find(attrs={"itemtype": True}))
+    has_canonical = bool(soup.find("link", attrs={"rel": re.compile(r"canonical", re.I)}))
 
     return {
         "title": title,
@@ -104,26 +151,35 @@ def analyze_html(html: str, url: str = "") -> Dict[str, Any]:
     if not html:
         html = ""
 
-    headings = extract_headings(html)
-    main_text = extract_main_text(html)
+    soup = _soup(html)
+    main = _main_node(soup)
+    for t in main.find_all(_NOISE + _CHROME):
+        t.decompose()
+
+    main_text = main.get_text(" ", strip=True)
     w_count = count_words(main_text)
+
+    headings = extract_headings(html)
 
     h1_count = len(headings["h1"])
     h2_count = len(headings["h2"])
     h3_count = len(headings["h3"])
 
-    image_count = len(re.findall(r'<img\b', html, re.IGNORECASE))
-    all_links = re.findall(r'<a\b[^>]*href=["\']([^"\']*)["\']', html, re.IGNORECASE)
-    total_links = len(all_links)
+    image_count = len(soup.find_all("img"))
+    links = soup.find_all("a", href=True)
+    total_links = len(links)
 
-    parsed_base = urlparse(url)
-    base_host = parsed_base.netloc.lower()
+    parsed_base = urlparse(url) if url else urlparse("")
+    base_host = parsed_base.netloc.lower() if parsed_base else ""
 
     external_links_count = 0
-    for href in all_links:
+    for a in links:
+        href = a["href"]
         if href.startswith("http://") or href.startswith("https://"):
             p_href = urlparse(href)
-            if p_href.netloc and p_href.netloc.lower() != base_host:
+            if base_host and p_href.netloc and p_href.netloc.lower() != base_host:
+                external_links_count += 1
+            elif not base_host:
                 external_links_count += 1
         elif href.startswith("//"):
             external_links_count += 1
@@ -135,11 +191,28 @@ def analyze_html(html: str, url: str = "") -> Dict[str, Any]:
     num_sentences = len(sentences_list) if sentences_list else 1
     avg_sentence_length = round(w_count / num_sentences, 2)
 
-    has_lists = bool(re.search(r'<(ul|ol)\b', html, re.IGNORECASE))
-    has_table = bool(re.search(r'<table\b', html, re.IGNORECASE))
-    has_video_embed = bool(re.search(r'<iframe\b', html, re.IGNORECASE) or re.search(r'youtube\.com|vimeo\.com', html, re.IGNORECASE))
-    has_faq = bool(re.search(r'<details\b', html, re.IGNORECASE) or re.search(r'faq', html, re.IGNORECASE))
-    has_toc = bool(re.search(r'table of contents', html, re.IGNORECASE) or re.search(r'<nav\b[^>]*>.*?#', html, re.IGNORECASE))
+    has_lists = bool(main.find(["ul", "ol"]))
+    has_table = bool(main.find("table"))
+    has_video_embed = bool(soup.find("iframe", src=re.compile(r"(youtube|vimeo|dailymotion)", re.I))) or \
+                      bool(soup.find("div", class_=re.compile("video", re.I))) or \
+                      bool(soup.find("video"))
+
+    has_schema_FAQPage = False
+    for s in soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}):
+        try:
+            content = s.get_text()
+            if content and ("FAQPage" in content or "faq" in content.lower()):
+                has_schema_FAQPage = True
+                break
+        except Exception:
+            pass
+    if not has_schema_FAQPage:
+        for el in soup.find_all(attrs={"itemtype": re.compile(r"FAQPage", re.I)}):
+            has_schema_FAQPage = True
+            break
+
+    has_faq = has_schema_FAQPage or bool(main.find("details")) or any("faq" in h.lower() for h in headings.get("h2", [])) or any("faq" in h.lower() for h in headings.get("h3", []))
+    has_toc = bool(soup.find(id=re.compile(r"toc|table-of-contents|contents", re.I))) or any("table of contents" in h.lower() for h in headings.get("h2", []))
 
     engagement_signals = {
         "has_lists": has_lists,

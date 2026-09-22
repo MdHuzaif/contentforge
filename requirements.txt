@@ -18,6 +18,9 @@ aiosqlite>=0.20.0
 # ===== Data handling =====
 pandas>=2.2.0
 
+# ===== Parsing =====
+beautifulsoup4>=4.12.0
+
 # ===== LangGraph (Level 3) =====
 langgraph>=0.2.50
 langgraph-checkpoint>=2.0.0
