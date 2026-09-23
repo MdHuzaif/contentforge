@@ -310,6 +310,16 @@ async def _firecrawl_fetch(url: str) -> Optional[str]:
     return None
 
 
+async def fetch_main_text(url: str) -> Optional[str]:
+    """Fetch page (httpx -> firecrawl rescue) and return cleaned main text."""
+    html = await _httpx_fetch(url)
+    if not html and _firecrawl_enabled():
+        html = await _firecrawl_fetch(url)
+    if not html:
+        return None
+    return extract_main_text(html)
+
+
 async def fetch_and_analyze(url: str) -> Optional[Dict[str, Any]]:
     """Fetch chain: httpx (free) -> Firecrawl rescue (credits) -> None."""
     html = await _httpx_fetch(url)

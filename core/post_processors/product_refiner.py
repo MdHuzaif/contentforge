@@ -179,9 +179,9 @@ Output ONLY the enhanced section starting with the ### heading. No code fences."
         # Validation: ensure no dollar prices slipped in
         if PRICE_RE.search(refined):
             logger.warning("Refined section for %s contained prices, using original",
-                          section['product_name'])
-            return f"### {original_heading}\n{original_content}"
-        
+                           section['product_name'])
+            return f"### {original_heading}{original_content}"
+
         return refined
         
     except Exception as e:

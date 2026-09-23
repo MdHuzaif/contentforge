@@ -32,6 +32,7 @@ class ContentForgeState(TypedDict, total=False):
     product_category: str              # Detected category (e.g., "laptop", "smartwatch")
     extraction_confidence: float       # 0.0-1.0 confidence score
     extraction_notes: str              # LLM notes about extraction quality
+    product_deep_data: Dict[str, Dict[str, Any]]  # Phase 1.5 verified deep dive data
     
     # === Phase 2: Sub-Prompt Generation ===
     sub_prompts: List[Dict[str, Any]]      # List of {id, title, prompt, word_target, status}
@@ -89,6 +90,7 @@ def create_initial_state(
         "product_category": "",
         "extraction_confidence": 0.0,
         "extraction_notes": "",
+        "product_deep_data": {},
         
         # Phase 2
         "sub_prompts": [],

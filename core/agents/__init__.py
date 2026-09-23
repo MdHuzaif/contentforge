@@ -10,8 +10,8 @@ from core.agents.supervisor import (
 )
 from core.agents.keyword_agent import build_keyword_agent
 from core.agents.competitor_agent import build_competitor_agent, run_competitor_analysis
-from core.agents.seo_agent import build_seo_agent, run_seo_analysis
 from core.agents.blog_writer_agent import write_blog
+from core.agents.subprompt_generator import build_product_subprompts
 
 __all__ = [
     "PIPELINE_STEPS",
@@ -22,7 +22,6 @@ __all__ = [
     "build_keyword_agent",
     "build_competitor_agent",
     "run_competitor_analysis",
-    "build_seo_agent",
-    "run_seo_analysis",
     "write_blog",
+    "build_product_subprompts",
 ]

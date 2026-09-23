@@ -400,6 +400,18 @@ async def data_gathering_node(state: ContentForgeState) -> Dict[str, Any]:
             logger.info(f"✅ Selected {len(products)} authentic products")
             for i, p in enumerate(products[:3], 1):
                 logger.info(f"   {i}. {p['name']} ({p['tier']})")
+
+            # === PRODUCT DEEP DIVE: verified multi-source product data (Phase 1.5) ===
+            try:
+                from core.post_processors.product_deep_dive import product_deep_dive
+                deep_data = await product_deep_dive(products, result.get("product_category", ""))
+                result["product_deep_data"] = deep_data
+                logger.info("🔬 Product Deep Dive complete: %d/%d products verified",
+                            sum(1 for d in deep_data.values() if d.get("found")),
+                            len(deep_data))
+            except Exception as e:
+                logger.warning("Product Deep Dive failed: %s", e)
+                result["product_deep_data"] = {}
             
         except Exception as e:
             logger.warning(f"Product selection failed: {e}")
@@ -580,23 +592,21 @@ Use primary keyword '{primary_kw}' once. Do NOT include buy buttons.""",
         tier_emoji = {"premium": "💎", "mid_range": "⭐", "budget": "💰"}.get(tier, "•")
         selling_points_text = ", ".join(selling_points) if selling_points else "highlight its standout features"
         
-        sub_prompts.append({
-            "id": i,
-            "title": product_name,
-            "type": "h3_detail",
-            "product_name": product_name,
-            "product_brand": brand,
-            "product_tier": tier,
-            "word_target": 600,
-            "status": "pending",
-            "primary_keyword": primary_kw,
-            "secondary_keywords": secondary_kws,
-            "prompt": f"""Write a detailed 500-700 word review of the {product_name} {category}.
+        from core.post_processors.product_deep_dive import format_deep_data_block
+        deep = (state.get("product_deep_data") or {}).get(product_name, {})
+        deep_block = format_deep_data_block(deep)
+        
+        prompt_body = f"""Write a detailed 500-700 word review of the {product_name} {category}.
 
 This is a {tier_label} product (tier: {tier_emoji} {tier}) in our '{topic}' roundup.
 Popularity score from competitor analysis: {popularity}/10.
 Background: {why_notable}
-Key Selling Points to Highlight: {selling_points_text}
+Key Selling Points to Highlight: {selling_points_text}"""
+
+        if deep_block:
+            prompt_body += "\n\n" + deep_block
+
+        prompt_body += f"""
 
 CRITICAL HEADING RULE - READ CAREFULLY:
 ❌ DO NOT include "### {product_name}" or any heading with the product name
@@ -644,7 +654,20 @@ CRITICAL RULES:
 - Use primary keyword '{primary_kw}' naturally 1-2 times
 - CRITICAL: DO NOT include "### {product_name}" or any heading with the product name.
 - REMEMBER: NO product name heading - start directly with the paragraph/hook.
-- DO NOT start your response with "###" or "##".""",
+- DO NOT start your response with "###" or "##"."""
+
+        sub_prompts.append({
+            "id": i,
+            "title": product_name,
+            "type": "h3_detail",
+            "product_name": product_name,
+            "product_brand": brand,
+            "product_tier": tier,
+            "word_target": 600,
+            "status": "pending",
+            "primary_keyword": primary_kw,
+            "secondary_keywords": secondary_kws,
+            "prompt": prompt_body,
             "key_points": [
                 f"Overview of {product_name}",
                 "Detailed specifications",
