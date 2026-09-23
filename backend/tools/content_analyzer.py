@@ -147,6 +147,24 @@ def get_meta_info(html: str) -> Dict[str, Any]:
     }
 
 
+def extract_tables(html: str, max_tables: int = 3) -> List[str]:
+    """Extract first N tables and convert them to Markdown-like pipe text."""
+    if not html:
+        return []
+    soup = _soup(html)
+    tables = []
+    main = _main_node(soup)
+    for table in main.find_all("table")[:max_tables]:
+        rows = []
+        for tr in table.find_all("tr"):
+            cells = [td.get_text(" ", strip=True) for td in tr.find_all(["th", "td"])]
+            if cells:
+                rows.append(" | ".join(cells))
+        if rows:
+            tables.append("\n".join(rows))
+    return tables
+
+
 def analyze_html(html: str, url: str = "") -> Dict[str, Any]:
     """Analyze raw HTML of competitor pages and return structured metrics and signals."""
     if not html:
@@ -230,6 +248,7 @@ def analyze_html(html: str, url: str = "") -> Dict[str, Any]:
         "h2_count": h2_count,
         "h3_count": h3_count,
         "headings": headings,
+        "tables": extract_tables(html, max_tables=3),
         "image_count": image_count,
         "total_links": total_links,
         "external_links_count": external_links_count,

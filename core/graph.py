@@ -166,8 +166,10 @@ async def competitor_analysis_node(state: ContentForgeState) -> Dict[str, Any]:
                 scraped_articles.append({
                     "url": url,
                     "title": title or f"Competitor {len(scraped_articles) + 1}",
-                    "content": content[:8000],  # Limit to 8000 chars per article
-                    "h2_titles": headings.get("h2", [])[:10],
+                    "h2_titles": headings.get("h2", [])[:15],
+                    "h3_titles": headings.get("h3", [])[:25],  # <-- ADD H3s (Product Names)
+                    "tables": comp.get("tables", [])[:3],      # <-- ADD Tables
+                    "content_snippet": content[:1500],         # Reduce raw text, rely on structure
                 })
             
             logger.info(f"Extracted structure from {url}: {len(headings.get('h2', []))} H2s")

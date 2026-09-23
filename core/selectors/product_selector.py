@@ -133,10 +133,13 @@ async def extract_products_universal(
 === EXTRACTION RULES ===
 1. Extract SPECIFIC products with brand + model from the content
 2. Target: {target_count} products total
-3. If content mentions fewer than {target_count}, ALSO suggest popular alternatives 
+3. Look closely at the [QUICK COMPARISON TABLES] and [ARTICLE STRUCTURE (H2/H3 HEADINGS)].
+4. In listicle/review articles, H3 headings and Table rows almost ALWAYS contain the specific Brand + Model names (e.g., "Dell XPS 15", "MacBook Pro 16 M3 Max").
+5. Cross-reference tables and H3 headings to confirm exact product names. Ignore generic H2/H3s like "Best Overall", "Buying Guide", "Conclusion", "How We Test".
+6. If content mentions fewer than {target_count}, ALSO suggest popular alternatives 
    in this category to reach {target_count}
-4. Mark which products are FROM CONTENT vs SUGGESTED
-5. Include mix of tiers: premium, mid_range, budget
+7. Mark which products are FROM CONTENT vs SUGGESTED
+8. Include mix of tiers: premium, mid_range, budget
 
 Return ONLY valid JSON (no markdown, no explanation):
 {{
@@ -325,29 +328,47 @@ Return ONLY JSON:
 
 
 def _build_competitor_content(competitor_data: Dict[str, Any]) -> str:
-    """Build combined text from competitor scraped content."""
+    """Build structured text from competitor scraped content (Tables + Headings)."""
     parts = []
-    
-    # Try scraped_articles first (clean raw content), then competitors
     competitors = competitor_data.get("scraped_articles", [])
     if not competitors:
         competitors = competitor_data.get("competitors", [])
-    
-    for i, comp in enumerate(competitors[:10], 1):
+        
+    for i, comp in enumerate(competitors[:10], 1):  # Process up to 10 URLs
         title = comp.get("title", "Untitled")
-        content = comp.get("content", "")[:3000]  # Limit per competitor
         url = comp.get("url", "")
         
-        if content:
-            parts.append(f"\n--- COMPETITOR {i}: {title} ---\nSource: {url}\n{content}")
-    
-    # Also check for raw content field
+        parts.append(f"\n=== COMPETITOR {i}: {title} ({url}) ===")
+        
+        # 1. Tables (Highest priority for product names & specs)
+        tables = comp.get("tables", [])
+        if tables:
+            parts.append("[QUICK COMPARISON TABLES]")
+            for t_idx, table in enumerate(tables[:2]):
+                parts.append(f"Table {t_idx+1}:\n{table}")
+                
+        # 2. H2 & H3 Headings (Product names are usually H3)
+        h2s = comp.get("h2_titles", [])
+        h3s = comp.get("h3_titles", [])
+        if h2s or h3s:
+            parts.append("[ARTICLE STRUCTURE (H2/H3 HEADINGS)]")
+            for h in h2s: parts.append(f"H2: {h}")
+            for h in h3s: parts.append(f"H3: {h}")
+            
+        # 3. Short Intro Snippet (Context)
+        snippet = comp.get("content_snippet", comp.get("content", ""))[:1000]
+        if snippet:
+            parts.append(f"[INTRO EXCERPT]\n{snippet}")
+
+    # Also check for raw content field if no competitors
     if not parts:
         raw_content = competitor_data.get("combined_content", "")
         if raw_content:
             parts.append(raw_content[:15000])
-    
-    return "\n".join(parts)
+
+    # Cap at 15000 chars to stay well within LLM context limits
+    full_text = "\n".join(parts)
+    return full_text[:15000]
 
 
 def _build_structure_content(competitor_data: Dict[str, Any]) -> str:
