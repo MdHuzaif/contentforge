@@ -1285,7 +1285,8 @@ CRITICAL RANKING REQUIREMENTS:
             )
             from core.post_processors.product_refiner import (
                 gather_product_signals,
-                refine_single_section
+                refine_single_section,
+                get_signals_for_product
             )
             
             # Safe access to state variables
@@ -1343,7 +1344,8 @@ CRITICAL RANKING REQUIREMENTS:
                             logger.info(f"📦 Detected product for affiliate: '{product_name}'")
                         
                         try:
-                            signals = await gather_product_signals(product_name, section_topic)
+                            deep_data = state.get("product_deep_data", {})
+                            signals = await get_signals_for_product(product_name, section_topic, deep_data)
                             
                             if signals.get("found", False):
                                 # Enrich signals with Level 3 metadata if available

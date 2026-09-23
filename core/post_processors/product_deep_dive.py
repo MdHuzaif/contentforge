@@ -80,8 +80,17 @@ async def _safe_sleep(delay: float):
 
 
 async def _search_product(product_name: str, kind: str) -> List[Dict[str, str]]:
-    query = (f"{product_name} specifications review" if kind == "specs"
-             else f"{product_name} real user review pros cons")
+    """Build search query based on kind: specs, proscons, reddit, amazon."""
+    if kind == "specs":
+        query = f"{product_name} specifications review"
+    elif kind == "proscons":
+        query = f"{product_name} real user review pros cons"
+    elif kind == "reddit":
+        query = f"site:reddit.com {product_name} review experience"
+    elif kind == "amazon":
+        query = f"site:amazon.com {product_name} review customer"
+    else:
+        query = f"{product_name} review"
     try:
         import core.post_processors.product_deep_dive as pdd_mod
         search_fn = getattr(pdd_mod, "get_top_results", get_top_results)
@@ -192,9 +201,19 @@ def format_deep_data_block(deep: Dict[str, Any]) -> str:
 async def deep_dive_product(product_name: str, category: str = "") -> Dict[str, Any]:
     result = dict(_EMPTY)
     result["product"] = product_name
-    specs_res = await _search_product(product_name, "specs")
-    pros_res = await _search_product(product_name, "proscons")
-    all_res = specs_res + pros_res
+
+    # Run 4 searches in parallel for speed
+    specs_task = asyncio.create_task(_search_product(product_name, "specs"))
+    proscons_task = asyncio.create_task(_search_product(product_name, "proscons"))
+    reddit_task = asyncio.create_task(_search_product(product_name, "reddit"))
+    amazon_task = asyncio.create_task(_search_product(product_name, "amazon"))
+
+    specs_res = await specs_task
+    proscons_res = await proscons_task
+    reddit_res = await reddit_task
+    amazon_res = await amazon_task
+
+    all_res = specs_res + proscons_res + reddit_res + amazon_res
     urls = [r["url"] for r in all_res if r.get("url")]
     snippets = [r.get("snippet") or r.get("content") or ""
                 for r in all_res if r.get("snippet") or r.get("content")]

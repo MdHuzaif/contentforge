@@ -299,3 +299,57 @@ def format_refinement_report(result: Dict) -> str:
                 "side by side with the original.**")
     
     return "\n".join(lines)
+
+
+def convert_deep_to_signals(deep: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert product_deep_data format to refinement signals format."""
+    if not deep or not deep.get("found"):
+        return {
+            "found": False,
+            "snippets": [],
+            "praise": [],
+            "complaints": [],
+            "level3_metadata": {},
+        }
+
+    snippets = []
+    # Include user quotes with source attribution
+    for q in deep.get("user_quotes", []):
+        quote = q.get("quote", "")
+        source = q.get("source", "")
+        if quote:
+            snippets.append(f"User review (via {source or 'verified source'}): "
+                            f"\"{quote}\"")
+
+    # Include pros/cons as snippets too
+    for pro in deep.get("real_pros", [])[:4]:
+        snippets.append(f"Review pro: {pro}")
+    for con in deep.get("real_cons", [])[:4]:
+        snippets.append(f"Review con: {con}")
+
+    return {
+        "found": True,
+        "snippets": snippets,
+        "praise": deep.get("real_pros", []),
+        "complaints": deep.get("real_cons", []),
+        "level3_metadata": {
+            "tier": deep.get("target_audience", ""),
+            "price_range": deep.get("price_range", ""),
+            "expert_verdict": deep.get("expert_verdict", ""),
+            "best_for": deep.get("best_for", ""),
+        },
+    }
+
+
+async def get_signals_for_product(product_name: str, topic: str,
+                                   deep_data: Dict) -> Dict[str, Any]:
+    """Get signals - reuse deep_data if available, else fall back to search."""
+    deep = deep_data.get(product_name, {})
+    if deep.get("found"):
+        logger.info(f"♻️ Reusing Deep Dive data for {product_name} (0 credits)")
+        return convert_deep_to_signals(deep)
+    # Fallback to expensive search
+    logger.info(f"🔎 Deep Dive data unavailable for {product_name}, "
+                f"falling back to search")
+    return await gather_product_signals(product_name, topic)
+
