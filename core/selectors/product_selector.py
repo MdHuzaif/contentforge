@@ -4,8 +4,77 @@ dental tech, farm equipment, cameras, etc.)."""
 from __future__ import annotations
 import re
 import json
+from datetime import datetime
 from typing import Dict, Any, List, Optional
 from app.config import logger
+
+
+# Known OLD chip/model markers (2024 or earlier)
+_OLD_MARKERS = [
+    r"\bm3\b", r"\bm2\b", r"\bm1\b",          # Apple M3 and older
+    r"\(2024\)", r"\(2023\)", r"\(2022\)",      # Explicit old years
+    r"\bgen\s*1[0-2]\b",                        # ThinkPad Gen 10-12
+    r"\bintel\s*core\s*(i[3579]-1[0-3])\b",     # Intel 10th-13th gen
+    r"\bryzen\s*[579]\s*[567]\d{3}\b",          # Ryzen 5000/7000 (older)
+    r"\brtx\s*[34]0\d{2}\b",                    # RTX 30/40 series
+]
+# Known NEW chip/model markers (2025-2026)
+_NEW_MARKERS = [
+    r"\bm4\b", r"\bm5\b",                        # Apple M4/M5
+    r"\(2025\)", r"\(2026\)",
+    r"\bgen\s*1[3-9]\b",                         # ThinkPad Gen 13+
+    r"\bintel\s*core\s*ultra\b",                 # Intel Core Ultra (new)
+    r"\bryzen\s*ai\b", r"\bryzen\s*9\s*9\d{3}\b", # Ryzen AI / 9000 series
+    r"\brtx\s*50\d{2}\b",                        # RTX 50 series
+]
+
+
+def detect_product_freshness(product_name: str, current_year: int = None) -> Dict:
+    """Detect if a product is outdated based on name markers.
+    Returns {is_outdated, detected_year, confidence}."""
+    if current_year is None:
+        current_year = datetime.now().year
+    name_lower = product_name.lower()
+
+    is_old = any(re.search(p, name_lower) for p in _OLD_MARKERS)
+    is_new = any(re.search(p, name_lower) for p in _NEW_MARKERS)
+
+    # Try to find explicit year
+    year_match = re.search(r"\(?(20\d{2})\)?", product_name)
+    detected_year = int(year_match.group(1)) if year_match else None
+
+    if is_old and not is_new:
+        return {"is_outdated": True, "detected_year": detected_year or (current_year - 2),
+                "confidence": "high"}
+    if is_new and not is_old:
+        return {"is_outdated": False, "detected_year": detected_year or current_year,
+                "confidence": "high"}
+    if detected_year:
+        outdated = (current_year - detected_year) > 1
+        return {"is_outdated": outdated, "detected_year": detected_year,
+                "confidence": "high"}
+    # No marker found -> unknown, do NOT reject
+    return {"is_outdated": False, "detected_year": None, "confidence": "unknown"}
+
+
+def filter_outdated_products(products: List[Dict], current_year: int = None):
+    """Split products into (kept, removed) based on freshness.
+    Unknown products are KEPT (don't reject without evidence)."""
+    if current_year is None:
+        current_year = datetime.now().year
+    kept, removed = [], []
+    for p in products:
+        name = p.get("name", "")
+        freshness = detect_product_freshness(name, current_year)
+        p["product_year"] = freshness.get("detected_year")
+        p["freshness_confidence"] = freshness.get("confidence")
+        if freshness["is_outdated"]:
+            removed.append(p)
+            logger.warning(f"⚠️ Outdated product detected: {name} "
+                           f"(likely {freshness['detected_year']}) - REMOVED")
+        else:
+            kept.append(p)
+    return kept, removed
 
 
 EXTRACTION_PROMPT_TEMPLATE = """You are an expert product analyst and competitive researcher.
@@ -122,6 +191,7 @@ async def extract_products_universal(
                 structure_content = structure_content[:5000] + "\n... (truncated)"
             
             # ENHANCED PROMPT: Ask for target_count, suggest alternatives if fewer found
+            current_year = datetime.now().year
             prompt = f"""You are an expert product analyst. Analyze competitor content for topic: "{topic}"
 
 === COMPETITOR CONTENT ===
@@ -140,11 +210,16 @@ async def extract_products_universal(
    in this category to reach {target_count}
 7. Mark which products are FROM CONTENT vs SUGGESTED
 8. Include mix of tiers: premium, mid_range, budget
+9. CRITICAL FRESHNESS RULE: ONLY extract products released in {current_year} 
+   or {current_year-1}. Look for year indicators: "(2025)", "(2026)", "Gen 13", 
+   "M4", "M5", "Core Ultra", "RTX 50".
+10. REJECT products from 2024 or earlier (M3, Gen 12, "2024" models). 
+    If a competitor article only lists old products, skip it.
 
 Return ONLY valid JSON (no markdown, no explanation):
-{{
+{json.dumps({
   "products": [
-    {{
+    {
       "name": "Brand Model Name",
       "brand": "Brand",
       "tier": "premium",
@@ -155,13 +230,13 @@ Return ONLY valid JSON (no markdown, no explanation):
       "cons": ["Con 1"],
       "source_competitors": ["url"],
       "source_type": "from_content"
-    }}
+    }
   ],
   "category_detected": "category",
   "total_products_found": 10,
   "extraction_confidence": 0.95,
   "extraction_notes": "Notes"
-}}"""
+}, indent=2)}"""
             
             logger.info(f"🤖 Stage 1: Sending extraction request")
             router = LLMRouter(task_type="competitor_analysis")
@@ -294,6 +369,64 @@ Return ONLY JSON:
                 "extraction_notes": "All stages failed",
             }
         
+        # === FRESHNESS FILTER & TOP-UP ===
+        products, removed = filter_outdated_products(products)
+        if removed:
+            logger.info(f"🗑️ Freshness filter removed {len(removed)} outdated products: "
+                        f"{[p['name'] for p in removed]}")
+        
+        if len(products) < target_count:
+            logger.info(f"🔄 Product count dropped to {len(products)} (< target {target_count}) after freshness filtering. Running top-up auto-generation...")
+            try:
+                existing_summary = f"\n\nAlready found: {', '.join(p['name'] for p in products[:5])}" if products else ""
+                current_yr = datetime.now().year
+                topup_prompt = f"""You are a product research expert. Generate a list of 
+{target_count - len(products)} popular, authentic products released in {current_yr} or {current_yr-1} for the topic: "{topic}"{existing_summary}
+
+=== REQUIREMENTS ===
+1. Generate REAL products released in {current_yr} or {current_yr-1} (no duplicates with existing)
+2. Use REAL brand names and REAL model names (e.g. M4, Core Ultra, Gen 13, 2026/2025 models)
+3. DO NOT include 2024 or earlier products (no M3, Gen 12, 2024 models)
+
+Return ONLY JSON:
+{{
+  "products": [
+    {{
+      "name": "Brand Model",
+      "brand": "Brand",
+      "tier": "premium",
+      "why_notable": "Popular for this use case",
+      "popularity_score": 7,
+      "selling_points": ["Feature 1", "Feature 2"],
+      "pros": ["Pro 1"],
+      "cons": ["Con 1"],
+      "source_competitors": [],
+      "source_type": "auto_suggested"
+    }}
+  ],
+  "category_detected": "category",
+  "total_products_found": {target_count},
+  "extraction_confidence": 0.6,
+  "extraction_notes": "Top-up after freshness filtering"
+}}"""
+                router = LLMRouter(task_type="competitor_analysis")
+                topup_response = await router.generate_text(
+                    prompt=topup_prompt,
+                    system_prompt="Return ONLY valid JSON with real current product names.",
+                )
+                topup_result = _parse_llm_response(topup_response)
+                topup_products = _validate_and_enrich(topup_result.get("products", []), target_count - len(products))
+                
+                existing_names = {p["name"].lower() for p in products}
+                for p in topup_products:
+                    if p["name"].lower() not in existing_names and len(products) < target_count:
+                        p["source_type"] = "auto_suggested"
+                        products.append(p)
+                        existing_names.add(p["name"].lower())
+                logger.info(f"✅ Top-up added products, total now {len(products)}")
+            except Exception as e:
+                logger.warning(f"Top-up generation failed: {e}")
+
         # Sort by popularity and limit to target_count
         products.sort(key=lambda x: x.get("popularity_score", 0), reverse=True)
         products = products[:target_count]

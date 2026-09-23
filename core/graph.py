@@ -107,8 +107,10 @@ async def competitor_analysis_node(state: ContentForgeState) -> Dict[str, Any]:
 
     # --- 1) SCRAPE (wrapped so failure never breaks pipeline) ---
     try:
-        results = await get_top_results(topic, max_results=6)   # use the EXISTING helper name found in STEP 1
-        logger.info("DuckDuckGo returned %d results", len(results))
+        current_year = datetime.now().year
+        search_query = f"{topic} {current_year}"
+        results = await get_top_results(search_query, max_results=10, days=365)   # force recency & 365 days
+        logger.info("Search returned %d results for '%s'", len(results), search_query)
         for r in results:
             url = r.get("url") or r.get("href", "")
             if not url:

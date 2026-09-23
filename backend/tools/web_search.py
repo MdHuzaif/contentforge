@@ -97,6 +97,10 @@ async def search_tavily(query: str, max_results: int = 10, **kwargs) -> List[Dic
     if include_domains:
         body["include_domains"] = include_domains
 
+    days = kwargs.get("days")
+    if days:
+        body["days"] = days
+
     results: List[Dict[str, str]] = []
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -351,9 +355,9 @@ def search_web(query: str, num_results: int = 10) -> list:
         return []
 
 
-async def get_top_results(query: str, max_results: int = 10) -> List[Dict[str, str]]:
+async def get_top_results(query: str, max_results: int = 10, **kwargs) -> List[Dict[str, str]]:
     """Chain: Tavily → DuckDuckGo → DDG Lite → Bing."""
-    results = await search_tavily(query, max_results=max_results)
+    results = await search_tavily(query, max_results=max_results, **kwargs)
     if not results:
         logger.info(f"Tavily empty/failed, trying DuckDuckGo for '{query}'")
         results = await search_duckduckgo(query, max_results=max_results)
