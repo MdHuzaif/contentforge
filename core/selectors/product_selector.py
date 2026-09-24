@@ -58,22 +58,46 @@ def detect_product_freshness(product_name: str, current_year: int = None) -> Dic
 
 
 def filter_outdated_products(products: List[Dict], current_year: int = None):
-    """Split products into (kept, removed) based on freshness.
-    Unknown products are KEPT (don't reject without evidence)."""
+    """Safety-net filter using LLM release_year (primary) + markers (fallback).
+    
+    Now lenient: only removes products that are CLEARLY outdated WITH a 
+    newer version available. Old products without updates are KEPT.
+    """
     if current_year is None:
         current_year = datetime.now().year
+    
     kept, removed = [], []
+    
     for p in products:
         name = p.get("name", "")
+        llm_year = p.get("release_year")
+        has_update = bool(p.get("updated_version_name"))
+        
+        # If LLM gave year AND product has newer version AND very old
+        if llm_year and isinstance(llm_year, int) and has_update:
+            age = current_year - llm_year
+            if age > 2:  # More than 2 years old WITH update available
+                removed.append(p)
+                logger.warning(
+                    f"Outdated with update ({llm_year}, {age}y): {name} -> REMOVED"
+                )
+                continue
+        
+        # Fallback to marker detection if no release_year or no update info
         freshness = detect_product_freshness(name, current_year)
-        p["product_year"] = freshness.get("detected_year")
+        p["product_year"] = p.get("release_year") or freshness.get("detected_year")
         p["freshness_confidence"] = freshness.get("confidence")
-        if freshness["is_outdated"]:
+        
+        if freshness["is_outdated"] and has_update:
             removed.append(p)
-            logger.warning(f"⚠️ Outdated product detected: {name} "
-                           f"(likely {freshness['detected_year']}) - REMOVED")
-        else:
-            kept.append(p)
+            logger.warning(
+                f"Outdated with update (marker): {name} -> REMOVED"
+            )
+            continue
+            
+        # Keep product (either recent, or old but no update)
+        kept.append(p)
+    
     return kept, removed
 
 
@@ -94,8 +118,8 @@ reviewed by these competitors.
 === EXTRACTION RULES ===
 
 1. Extract ONLY SPECIFIC products with brand + model name
-   ✅ GOOD: "Dell XPS 15 9530", "Apple Watch Ultra 2", "John Deere 5075E Tractor"
-   ❌ BAD: "laptop", "smartwatch", "a good tractor", "Dell" (brand only)
+   - GOOD: "Dell XPS 15 9530", "Apple Watch Ultra 2", "John Deere 5075E Tractor"
+   - BAD: "laptop", "smartwatch", "a good tractor", "Dell" (brand only)
 
 2. Include products from ALL price tiers if available:
    - Premium/Flagship (highest-end, most expensive)
@@ -106,16 +130,25 @@ reviewed by these competitors.
    - Full product name (brand + model + variant if applicable)
    - Brand name (alone)
    - Tier category (premium / mid_range / budget)
-   - Why this product is notable (1 sentence, based on competitor mentions)
-   - Estimated popularity: How many competitors mentioned it (1-10)
-   - Key selling points (3-5 bullet points from competitor reviews)
-   - Pros (from competitor reviews)
-   - Cons (from competitor reviews)
+   - release_year: The year it was launched (integer like 2026, or null if unknown)
+   - release_month: The month it was launched (like "March", or null if unknown)
+   - updated_version_name: If a newer version exists, name it (e.g., "MacBook Air M5 (2026)"), or null if none
+   - why_notable: Brief reason based on competitor mentions (1 sentence)
+   - popularity_score: How many competitors mentioned it (1-10)
+   - selling_points: 3-5 bullet points from competitor reviews
+   - pros: From competitor reviews
+   - cons: From competitor reviews
 
 4. Be AUTHENTIC — only include products that competitors ACTUALLY mentioned 
    with specific details. Do NOT invent products.
 
 5. Target: Extract {target_count} products (or fewer if competitors mention fewer)
+
+6. RELEASE DATE EXTRACTION: For EACH product, determine release_year and release_month accurately. Do not confuse review date with release date.
+
+7. UPDATED VERSION DETECTION: For EACH product, check if a newer version exists. Set updated_version_name or null.
+
+8. DO NOT FILTER: Extract ALL products mentioned, regardless of age. Do not reject old products. Selection happens in a separate step.
 
 === OUTPUT FORMAT ===
 
@@ -127,6 +160,9 @@ Return ONLY valid JSON in this EXACT structure (no markdown, no explanation):
       "name": "Full Brand Model Name",
       "brand": "Brand Name",
       "tier": "premium",
+      "release_year": 2026,
+      "release_month": "March",
+      "updated_version_name": null,
       "why_notable": "Brief reason based on competitor mentions",
       "popularity_score": 8,
       "selling_points": ["Point 1", "Point 2", "Point 3"],
@@ -180,7 +216,7 @@ async def extract_products_universal(
         result = {}
         
         # === STAGE 1: Try competitor scraped content ===
-        logger.info("🔍 Stage 1: Trying competitor scraped content...")
+        logger.info("🔍 Stage 1a: Trying competitor scraped content (extracting all)...")
         competitor_content = _build_competitor_content(competitor_data)
         structure_content = _build_structure_content(competitor_data)
         
@@ -190,55 +226,16 @@ async def extract_products_universal(
             if len(structure_content) > 5000:
                 structure_content = structure_content[:5000] + "\n... (truncated)"
             
-            # ENHANCED PROMPT: Ask for target_count, suggest alternatives if fewer found
             current_year = datetime.now().year
-            prompt = f"""You are an expert product analyst. Analyze competitor content for topic: "{topic}"
-
-=== COMPETITOR CONTENT ===
-{competitor_content}
-
-=== STRUCTURE HEADINGS ===
-{structure_content}
-
-=== EXTRACTION RULES ===
-1. Extract SPECIFIC products with brand + model from the content
-2. Target: {target_count} products total
-3. Look closely at the [QUICK COMPARISON TABLES] and [ARTICLE STRUCTURE (H2/H3 HEADINGS)].
-4. In listicle/review articles, H3 headings and Table rows almost ALWAYS contain the specific Brand + Model names (e.g., "Dell XPS 15", "MacBook Pro 16 M3 Max").
-5. Cross-reference tables and H3 headings to confirm exact product names. Ignore generic H2/H3s like "Best Overall", "Buying Guide", "Conclusion", "How We Test".
-6. If content mentions fewer than {target_count}, ALSO suggest popular alternatives 
-   in this category to reach {target_count}
-7. Mark which products are FROM CONTENT vs SUGGESTED
-8. Include mix of tiers: premium, mid_range, budget
-9. CRITICAL FRESHNESS RULE: ONLY extract products released in {current_year} 
-   or {current_year-1}. Look for year indicators: "(2025)", "(2026)", "Gen 13", 
-   "M4", "M5", "Core Ultra", "RTX 50".
-10. REJECT products from 2024 or earlier (M3, Gen 12, "2024" models). 
-    If a competitor article only lists old products, skip it.
-
-Return ONLY valid JSON (no markdown, no explanation):
-{json.dumps({
-  "products": [
-    {
-      "name": "Brand Model Name",
-      "brand": "Brand",
-      "tier": "premium",
-      "why_notable": "Reason",
-      "popularity_score": 8,
-      "selling_points": ["Point 1", "Point 2"],
-      "pros": ["Pro 1"],
-      "cons": ["Con 1"],
-      "source_competitors": ["url"],
-      "source_type": "from_content"
-    }
-  ],
-  "category_detected": "category",
-  "total_products_found": 10,
-  "extraction_confidence": 0.95,
-  "extraction_notes": "Notes"
-}, indent=2)}"""
+            prompt = EXTRACTION_PROMPT_TEMPLATE.format(
+                topic=topic,
+                competitor_count=competitor_count,
+                competitor_content=competitor_content,
+                structure_content=structure_content,
+                target_count=target_count * 2,
+            )
             
-            logger.info(f"🤖 Stage 1: Sending extraction request")
+            logger.info(f"🤖 Stage 1a: Sending extraction request")
             router = LLMRouter(task_type="competitor_analysis")
             response = await router.generate_text(
                 prompt=prompt,
@@ -246,11 +243,42 @@ Return ONLY valid JSON (no markdown, no explanation):
             )
             
             result = _parse_llm_response(response)
-            products = _validate_and_enrich(result.get("products", []), target_count)
+            products = _validate_and_enrich(result.get("products", []), target_count * 2)
             
             if products:
                 extraction_method = "competitor_content"
-                logger.info(f"✅ Stage 1: Extracted {len(products)} products")
+                logger.info(f"✅ Stage 1a: Extracted {len(products)} candidate products")
+                
+                # === Stage 1b: Intelligent Selection (2nd LLM call) ===
+                if len(products) > target_count:
+                    logger.info(f"🧠 Stage 1b: Intelligent selection ({len(products)} -> {target_count})")
+                    selection_result = await intelligent_product_selection(
+                        products=products,
+                        target_count=target_count,
+                        current_year=current_year,
+                    )
+                    products = selection_result.get("selected_products", products[:target_count])
+                    rejected = selection_result.get("rejected_products", [])
+                    
+                    if rejected:
+                        logger.info(
+                            f"🗑️ Stage 1b rejected {len(rejected)} products: "
+                            f"{[r.get('name', '') for r in rejected]}"
+                        )
+                else:
+                    logger.info(f"Stage 1b skipped (only {len(products)} products, target {target_count})")
+                
+                # === Stage 1c: Tier Balance ===
+                all_products = _validate_and_enrich(result.get("products", []), target_count * 2)
+                products = balance_tiers(products, all_products, target_count)
+                
+                # Apply safety-net filter
+                products, removed = filter_outdated_products(products, current_year)
+                if removed:
+                    logger.info(
+                        f"🗑️ Safety-net filter removed {len(removed)} products: "
+                        f"{[p['name'] for p in removed]}"
+                    )
         
         # === STAGE 2: Try structure headings only (if Stage 1 failed or < target) ===
         if len(products) < target_count:
@@ -589,17 +617,34 @@ def _validate_and_enrich(products: List[Dict], target_count: int) -> List[Dict]:
         
         seen_names.add(name_lower)
         
+        # Handle release date fields
+        ry = p.get("release_year")
+        try:
+            ry = int(ry) if ry is not None else None
+        except (ValueError, TypeError):
+            ry = None
+
+        rm = p.get("release_month")
+        rm = str(rm).strip() if rm else None
+
+        uvn = p.get("updated_version_name")
+        uvn = str(uvn).strip() if uvn else None
+
         # Normalize fields with defaults
         validated.append({
             "name": name,
             "brand": (p.get("brand") or _extract_brand(name)).strip(),
             "tier": _normalize_tier(p.get("tier", "mid_range")),
+            "release_year": ry,
+            "release_month": rm,
+            "updated_version_name": uvn,
             "why_notable": p.get("why_notable", ""),
             "popularity_score": _safe_int(p.get("popularity_score", 1), 1, 10),
             "selling_points": _safe_list(p.get("selling_points", []), max_items=5),
             "pros": _safe_list(p.get("pros", []), max_items=5),
             "cons": _safe_list(p.get("cons", []), max_items=5),
             "source_competitors": _safe_list(p.get("source_competitors", []), max_items=5),
+            "source_type": p.get("source_type", "unknown"),
         })
         
         if len(validated) >= target_count * 2:
@@ -609,6 +654,235 @@ def _validate_and_enrich(products: List[Dict], target_count: int) -> List[Dict]:
     validated.sort(key=lambda x: x.get("popularity_score", 0), reverse=True)
     
     return validated[:target_count]
+
+
+SELECTION_PROMPT_TEMPLATE = """You are an expert product analyst making smart selection decisions for a buying guide article.
+
+Current year: {current_year}
+Target: Select the {target_count} BEST products from the candidates below.
+
+=== CANDIDATE PRODUCTS ===
+{products_json}
+
+=== SELECTION CRITERIA (in order of importance) ===
+1. FRESHNESS: Prefer products from {current_year} or {current_year_minus_1}.
+   HOWEVER, keep older products if NO newer version exists.
+   Example: "ThinkPad X1 Carbon Gen 11 (2023)" with no Gen 12/13 = KEEP
+   Example: "MacBook Air M3 (2024)" when M5 exists = REJECT
+
+2. UPDATED VERSIONS: If a product has updated_version_name, strongly prefer the NEWER version. Only keep the old one if it offers exceptional value.
+
+3. MARKET RELEVANCE: Prefer products with high popularity_score.
+
+4. TIER DIVERSITY: Prefer natural mix of premium/mid_range/budget.
+   Do NOT force distribution - select BEST products regardless of tier.
+   Only ensure at least 1 product from each tier if available.
+
+5. FEATURE IMPORTANCE: Prefer products with notable features.
+
+6. COMPETITOR CONSENSUS: Products mentioned by more competitors rank higher.
+
+=== OUTPUT FORMAT ===
+Return ONLY valid JSON:
+{{
+  "selected_products": [
+    {{
+      "name": "Product Name",
+      "selection_score": 9.5,
+      "reasoning": "Why this product was selected (1 sentence)",
+      "decision": "keep"
+    }}
+  ],
+  "rejected_products": [
+    {{
+      "name": "Product Name",
+      "reasoning": "Why rejected (1 sentence)",
+      "rejection_reason": "outdated_with_update|low_relevance|tier_imbalance|other"
+    }}
+  ],
+  "tier_distribution": {{
+    "premium": 3,
+    "mid_range": 2,
+    "budget": 2
+  }}
+}}
+
+Sort selected_products by selection_score (highest first).
+Return EXACTLY {target_count} selected products (or fewer if candidates < target).
+"""
+
+
+async def intelligent_product_selection(
+    products: List[Dict],
+    target_count: int,
+    current_year: int = None,
+) -> Dict[str, Any]:
+    """Stage 1b: Intelligently select best products using LLM reasoning.
+    
+    Returns dict with selected_products, rejected_products, tier_distribution.
+    """
+    if current_year is None:
+        current_year = datetime.now().year
+    
+    if not products:
+        return {
+            "selected_products": [],
+            "rejected_products": [],
+            "tier_distribution": {},
+        }
+    
+    # If fewer products than target, keep all
+    if len(products) <= target_count:
+        return {
+            "selected_products": [
+                {
+                    "name": p["name"],
+                    "selection_score": p.get("popularity_score", 5),
+                    "reasoning": "Included (not enough candidates to filter)",
+                    "decision": "keep",
+                    **{k: v for k, v in p.items() if k != "name"},
+                }
+                for p in products
+            ],
+            "rejected_products": [],
+            "tier_distribution": {},
+        }
+    
+    # Build products JSON for prompt (compact)
+    compact_products = []
+    for p in products:
+        compact_products.append({
+            "name": p.get("name", ""),
+            "tier": p.get("tier", ""),
+            "release_year": p.get("release_year"),
+            "release_month": p.get("release_month"),
+            "updated_version_name": p.get("updated_version_name"),
+            "popularity_score": p.get("popularity_score", 5),
+            "why_notable": p.get("why_notable", ""),
+        })
+    
+    prompt = SELECTION_PROMPT_TEMPLATE.format(
+        current_year=current_year,
+        current_year_minus_1=current_year - 1,
+        target_count=target_count,
+        products_json=json.dumps(compact_products, indent=2),
+    )
+    
+    try:
+        from backend.llm.router import LLMRouter
+        router = LLMRouter(task_type="competitor_analysis")
+        response = await router.generate_text(
+            prompt=prompt,
+            system_prompt="You are a product selection expert. Return ONLY valid JSON.",
+        )
+        
+        result = _parse_llm_response(response)
+        
+        selected = result.get("selected_products", [])
+        rejected = result.get("rejected_products", [])
+        
+        # Merge full product data into selected products
+        products_by_name = {p["name"].lower(): p for p in products}
+        enriched_selected = []
+        for sel in selected:
+            sel_name_lower = sel.get("name", "").lower()
+            full_data = products_by_name.get(sel_name_lower, {})
+            enriched_selected.append({
+                **full_data,
+                "name": sel.get("name", full_data.get("name", "")),
+                "selection_score": sel.get("selection_score", 5),
+                "selection_reasoning": sel.get("reasoning", ""),
+                "decision": sel.get("decision", "keep"),
+            })
+        
+        # Sort by selection_score (highest first)
+        enriched_selected.sort(
+            key=lambda x: x.get("selection_score", 0), 
+            reverse=True
+        )
+        
+        return {
+            "selected_products": enriched_selected[:target_count],
+            "rejected_products": rejected,
+            "tier_distribution": result.get("tier_distribution", {}),
+        }
+        
+    except Exception as e:
+        logger.warning(f"intelligent_product_selection failed: {e}. Using fallback.")
+        # Fallback: just take top N by popularity
+        sorted_products = sorted(
+            products, 
+            key=lambda x: x.get("popularity_score", 0), 
+            reverse=True
+        )
+        return {
+            "selected_products": sorted_products[:target_count],
+            "rejected_products": [],
+            "tier_distribution": {},
+        }
+
+
+def balance_tiers(
+    selected: List[Dict],
+    pool: List[Dict],
+    target_count: int,
+) -> List[Dict]:
+    """Stage 1c: Ensure mix of premium/mid_range/budget tiers.
+    
+    If selection lacks a tier, add top product of that tier from pool.
+    """
+    if not selected:
+        return selected
+    
+    # Count tiers in selection
+    tier_counts = {"premium": 0, "mid_range": 0, "budget": 0}
+    for p in selected:
+        tier = p.get("tier", "mid_range")
+        if tier in tier_counts:
+            tier_counts[tier] += 1
+    
+    # Find missing tiers
+    missing_tiers = [t for t, count in tier_counts.items() if count == 0]
+    
+    if not missing_tiers or not pool:
+        return selected
+    
+    result = list(selected)
+    used_names = {p["name"].lower() for p in result}
+    
+    # For each missing tier, add best available from pool
+    for missing_tier in missing_tiers:
+        candidates = [
+            p for p in pool
+            if p.get("tier") == missing_tier
+            and p["name"].lower() not in used_names
+        ]
+        if candidates:
+            # Sort by popularity, pick best
+            best = sorted(
+                candidates,
+                key=lambda x: x.get("popularity_score", 0),
+                reverse=True
+            )[0]
+            
+            # Replace lowest-scored product of over-represented tier
+            over_represented = max(tier_counts, key=tier_counts.get)
+            replace_candidates = [
+                p for p in result if p.get("tier") == over_represented
+            ]
+            if replace_candidates and len(result) >= target_count:
+                # Replace the lowest popularity one
+                worst = sorted(
+                    replace_candidates,
+                    key=lambda x: x.get("popularity_score", 0)
+                )[0]
+                result.remove(worst)
+            
+            result.append(best)
+            used_names.add(best["name"].lower())
+            tier_counts[missing_tier] += 1
+    
+    return result[:target_count]
 
 
 def _extract_brand(name: str) -> str:
