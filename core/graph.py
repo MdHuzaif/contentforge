@@ -312,16 +312,10 @@ Return ONLY valid JSON, no markdown, no explanation."""
             if k not in gap_analysis or not gap_analysis[k]:
                 gap_analysis[k] = v
 
-    # --- NEW: shopping/user signals enrichment (optional, never fatal) ---
-    try:
-        from backend.tools.shopping_intelligence import gather_shopping_signals
-        signals = await gather_shopping_signals(topic)
-        if signals:
-            if isinstance(gap_analysis, dict):
-                gap_analysis["shopping_signals"] = signals
-            logger.info("Shopping signals appended (%d chars)", len(signals))
-    except Exception as e:
-        logger.warning("Shopping intelligence skipped: %s", e)
+    # Shopping signals removed (Level 3 cleanup)
+    # Refinement now uses Deep Dive data via get_signals_for_product()
+    # This saves 4 Tavily credits per article
+    logger.info("🗑️ Shopping signals skipped (using Deep Dive data for refinement)")
 
     return {
         "competitor_analysis": {

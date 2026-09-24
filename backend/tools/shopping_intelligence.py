@@ -306,7 +306,16 @@ def _extract_product_mentions(text: str) -> List[str]:
 
 
 async def gather_shopping_signals(topic: str, max_per_query: int = 4) -> str:
-    """Gather shopping signals with dynamic LLM-based tier classification."""
+    """[DEPRECATED - Level 3 cleanup] Gather shopping signals with dynamic 
+    LLM-based tier classification.
+    
+    This function is no longer called in the main pipeline.
+    Refinement now uses Deep Dive data via get_signals_for_product().
+    Kept for backward compatibility only.
+    
+    Savings: 4 Tavily credits per article.
+    """
+    logger.warning("gather_shopping_signals() is deprecated and no longer called")
     category = _detect_product_category(topic)
     
     # Fetch competitor content (reuse existing infrastructure)
