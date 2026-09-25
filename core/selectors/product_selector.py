@@ -217,8 +217,26 @@ async def extract_products_universal(
         
         # === STAGE 1: Try competitor scraped content ===
         logger.info("🔍 Stage 1a: Trying competitor scraped content (extracting all)...")
+        
+        # === DEBUG: Log competitor_data structure ===
+        logger.info(f"🔍 DEBUG: competitor_data keys = {list(competitor_data.keys())}")
+        
+        _articles = competitor_data.get("scraped_articles") or competitor_data.get("competitors") or []
+        logger.info(f"🔍 DEBUG: articles count = {len(_articles)}")
+        
+        if _articles:
+            first = _articles[0]
+            logger.info(f"🔍 DEBUG: first article keys = {list(first.keys())}")
+            logger.info(f"🔍 DEBUG: first article content length = {len(first.get('content', ''))}")
+            logger.info(f"🔍 DEBUG: first article has tables = {bool(first.get('tables'))}")
+            logger.info(f"🔍 DEBUG: first article h2_titles = {first.get('h2_titles', first.get('h2_headings', []))[:3]}")
+            logger.info(f"🔍 DEBUG: first article h3_titles = {first.get('h3_titles', first.get('h3_headings', []))[:3]}")
+        
         competitor_content = _build_competitor_content(competitor_data)
         structure_content = _build_structure_content(competitor_data)
+        
+        logger.info(f"🔍 DEBUG: competitor_content length = {len(competitor_content)}")
+        logger.info(f"🔍 DEBUG: structure_content length = {len(structure_content)}")
         
         if competitor_content or structure_content:
             if len(competitor_content) > 15000:
@@ -628,84 +646,138 @@ def _html_to_markdown(html: str) -> str:
 def _build_competitor_content(competitor_data: Dict[str, Any]) -> str:
     """Build structured markdown from competitor scraped articles.
     
-    Uses BeautifulSoup + custom converter to produce markdown-like output
-    similar to Firecrawl but completely FREE.
+    Reads ALL available fields: content, tables, h2/h3 titles, snippets.
+    Converts HTML content to markdown. Falls back gracefully.
     """
-    articles = competitor_data.get("scraped_articles", [])
+    articles = (
+        competitor_data.get("scraped_articles") or
+        competitor_data.get("competitors") or
+        competitor_data.get("sources") or
+        []
+    )
+    
     if not articles:
-        articles = competitor_data.get("competitors", [])
+        logger.warning("🔍 _build_competitor_content: No articles found in competitor_data")
+        return ""
     
     content_parts = []
     
-    for i, article in enumerate(articles[:10], 1):  # Process up to 10 URLs
+    for i, article in enumerate(articles[:10], 1):
         url = article.get("url", "unknown")
+        title = article.get("title", "")
+        section_parts = []
+        
+        # Header
+        header = f"### Article {i}: {title or url}"
+        section_parts.append(header)
+        
+        # 1. Tables (highest priority for product names & specs)
+        tables = article.get("tables", [])
+        if tables:
+            section_parts.append("\n**[COMPARISON TABLES]**")
+            for t_idx, table in enumerate(tables[:3]):
+                section_parts.append(f"Table {t_idx + 1}:\n{table}")
+        
+        # 2. H2/H3 Headings (product names usually here)
+        h2s = article.get("h2_titles", []) or article.get("h2_headings", [])
+        h3s = article.get("h3_titles", []) or article.get("h3_headings", [])
+        if h2s or h3s:
+            section_parts.append("\n**[ARTICLE STRUCTURE]**")
+            for h in h2s[:15]:
+                section_parts.append(f"H2: {h}")
+            for h in h3s[:20]:
+                section_parts.append(f"H3: {h}")
+        
+        # 3. Main content (convert HTML to markdown if needed)
         raw_content = article.get("content", "")
+        if raw_content and len(raw_content) > 20:
+            is_html = raw_content.strip()[:50].lower().startswith(("<!doctype", "<html", "<body", "<div", "<p>", "<h1", "<h2", "<main"))
+            
+            if is_html:
+                try:
+                    markdown = _html_to_markdown(raw_content)
+                    if markdown and len(markdown) > 10:
+                        # Truncate to 3000 chars per article
+                        if len(markdown) > 3000:
+                            markdown = markdown[:3000] + "\n... (truncated)"
+                        section_parts.append(f"\n**[FULL CONTENT]**\n{markdown}")
+                except Exception as e:
+                    logger.debug(f"HTML conversion failed for {url}: {e}")
+                    snippet = article.get("content_snippet", raw_content[:1000])
+                    section_parts.append(f"\n**[CONTENT EXCERPT]**\n{snippet}")
+            else:
+                if len(raw_content) > 3000:
+                    raw_content = raw_content[:3000] + "\n... (truncated)"
+                section_parts.append(f"\n**[FULL CONTENT]**\n{raw_content}")
         
-        if not raw_content:
-            continue
+        # 4. Fallback: content_snippet if no content
+        elif article.get("content_snippet"):
+            section_parts.append(f"\n**[CONTENT EXCERPT]**\n{article['content_snippet'][:1000]}")
         
-        # Check if content is HTML
-        is_html = raw_content.strip().startswith(("<!DOCTYPE", "<html", "<HTML", "<"))
-        
-        if is_html:
-            try:
-                # Convert HTML to structured markdown
-                markdown = _html_to_markdown(raw_content)
-                
-                # Truncate if too long (max 3000 chars per article)
-                if len(markdown) > 3000:
-                    markdown = markdown[:3000] + "\n\n... (content truncated)"
-                
-                content_parts.append(
-                    f"### Article {i}: {url}\n\n{markdown}\n\n---\n\n"
-                )
-                
-            except Exception as e:
-                logger.warning(f"Failed to parse HTML from {url}: {e}")
-                # Fallback to raw content (truncated)
-                content_parts.append(
-                    f"### Article {i}: {url}\n\n{raw_content[:1000]}\n\n---\n\n"
-                )
-        else:
-            # Content is already clean text
-            content_parts.append(
-                f"### Article {i}: {url}\n\n{raw_content}\n\n---\n\n"
-            )
+        if len(section_parts) > 1:
+            content_parts.append("\n".join(section_parts))
     
-    return "\n".join(content_parts)
+    result = "\n\n---\n\n".join(content_parts)
+    
+    if not result:
+        logger.warning("🔍 _build_competitor_content: All articles produced empty content")
+    
+    return result[:15000]
 
 
 def _build_structure_content(competitor_data: Dict[str, Any]) -> str:
-    """Build structure content from H2/H3 headings with clear hierarchy."""
-    articles = competitor_data.get("scraped_articles", [])
+    """Build structure content from H2/H3 headings with clear hierarchy.
+    
+    Reads both h2_titles/h2_headings and h3_titles/h3_headings field names.
+    """
+    articles = (
+        competitor_data.get("scraped_articles") or
+        competitor_data.get("competitors") or
+        competitor_data.get("sources") or
+        []
+    )
+    
     if not articles:
-        articles = competitor_data.get("competitors", [])
+        return ""
     
     structure_parts = []
     
     for i, article in enumerate(articles[:10], 1):
         url = article.get("url", "unknown")
-        h2s = article.get("h2_headings", []) or article.get("h2_titles", [])
-        h3s = article.get("h3_headings", []) or article.get("h3_titles", [])
+        
+        h2s = article.get("h2_titles", []) or article.get("h2_headings", [])
+        h3s = article.get("h3_titles", []) or article.get("h3_headings", [])
         
         if not h2s and not h3s:
             continue
         
-        structure_lines = [f"#### Article {i}: {url}\n"]
+        lines = [f"#### Article {i}: {url}\n"]
         
         if h2s:
-            structure_lines.append("**H2 Headings (Main Sections):**")
-            for h2 in h2s[:15]:  # Limit to 15 headings
-                structure_lines.append(f"- {h2}")
-            structure_lines.append("")
+            lines.append("**H2 Headings (Main Sections):**")
+            for h2 in h2s[:15]:
+                lines.append(f"- {h2}")
+            lines.append("")
         
         if h3s:
-            structure_lines.append("**H3 Headings (Sub-sections - often product names):**")
-            for h3 in h3s[:20]:  # Limit to 20 headings
-                structure_lines.append(f"  - {h3}")
-            structure_lines.append("")
+            lines.append("**H3 Headings (Sub-sections — often product names):**")
+            for h3 in h3s[:20]:
+                lines.append(f"  - {h3}")
+            lines.append("")
         
-        structure_parts.append("\n".join(structure_lines))
+        structure_parts.append("\n".join(lines))
+    
+    optimal = competitor_data.get("optimal_structure", [])
+    if optimal:
+        lines = ["#### Optimal Structure (from competitor analysis)\n"]
+        for section in optimal[:30]:
+            if isinstance(section, dict):
+                title = section.get("title", "")
+                if title:
+                    lines.append(f"- {title}")
+            elif isinstance(section, str):
+                lines.append(f"- {section}")
+        structure_parts.append("\n".join(lines))
     
     return "\n\n".join(structure_parts)
 
