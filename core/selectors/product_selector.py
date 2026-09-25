@@ -275,18 +275,18 @@ async def extract_products_universal(
             )
             
             result = _parse_llm_response(response)
-            products = _validate_and_enrich(result.get("products", []), target_count * 2)
+            products = _validate_and_enrich(result.get("products", []), target_count)
 
             # If Stage 1a failed (no products), retry with simpler prompt
             if not products:
                 logger.warning("⚠️ Stage 1a returned 0 products, retrying with simpler prompt...")
                 
-                simple_prompt = f"""Extract product names from this content about "{topic}":
+                simple_prompt = f"""Extract ALL product names mentioned in this content about "{topic}":
 
 {competitor_content[:5000]}
 
-Return ONLY JSON: {{"products": [{{"name": "Product Name", "brand": "Brand", "tier": "premium"}}]}}
-Extract up to {target_count * 2} products."""
+Extract ONLY products that are explicitly mentioned. Do NOT invent products.
+Return ONLY JSON: {{"products": [{{"name": "Product Name", "brand": "Brand", "tier": "premium"}}]}}"""
                 
                 router = LLMRouter(task_type="competitor_analysis")
                 retry_response = await router.generate_text(
@@ -295,7 +295,7 @@ Extract up to {target_count * 2} products."""
                 )
                 
                 retry_result = _parse_llm_response(retry_response)
-                products = _validate_and_enrich(retry_result.get("products", []), target_count * 2)
+                products = _validate_and_enrich(retry_result.get("products", []), target_count)
                 
                 if products:
                     logger.info(f"✅ Stage 1a retry succeeded: {len(products)} products")
@@ -326,7 +326,7 @@ Extract up to {target_count * 2} products."""
                     logger.info(f"Stage 1b skipped (only {len(products)} products, target {target_count})")
                 
                 # === Stage 1c: Tier Balance ===
-                all_products = _validate_and_enrich(result.get("products", []), target_count * 2)
+                all_products = _validate_and_enrich(result.get("products", []), target_count)
                 products = balance_tiers(products, all_products, target_count)
                 
                 # Apply safety-net filter
@@ -1010,7 +1010,7 @@ def _validate_and_enrich(products: List[Dict], target_count: int) -> List[Dict]:
             "source_type": p.get("source_type", "unknown"),
         })
         
-        if len(validated) >= target_count * 2:
+        if len(validated) >= target_count:
             break
     
     # Sort by popularity score (highest first)
