@@ -142,7 +142,13 @@ reviewed by these competitors.
 4. Be AUTHENTIC — only include products that competitors ACTUALLY mentioned 
    with specific details. Do NOT invent products.
 
-5. Target: Extract {target_count} products (or fewer if competitors mention fewer)
+5. TARGET: Extract ALL specific products mentioned in the competitor content.
+   - There may be anywhere from 5 to 30 products — extract what's actually there
+   - Do NOT invent products to reach a target number
+   - Do NOT add products not mentioned in the content
+   - Quality over quantity: better to extract 8 real products than 20 with fake ones
+   - Minimum: Extract at least 5 products if available
+   - Maximum: No limit — extract every specific product mentioned
 
 6. RELEASE DATE EXTRACTION: For EACH product, determine release_year and release_month accurately. Do not confuse review date with release date.
 
@@ -258,7 +264,7 @@ async def extract_products_universal(
                 competitor_count=competitor_count,
                 competitor_content=competitor_content,
                 structure_content=structure_content,
-                target_count=target_count * 2,
+                # target_count removed - extraction is now dynamic
             )
             
             logger.info(f"🤖 Stage 1a: Sending extraction request")
@@ -299,7 +305,7 @@ Extract up to {target_count * 2} products."""
                 extraction_method = "competitor_content"
                 logger.info(f"✅ Stage 1a: Extracted {len(products)} candidate products")
                 
-                # === Stage 1b: Intelligent Selection (2nd LLM call) ===
+                # === Stage 1b: Intelligent Selection (only if we have more than target) ===
                 if len(products) > target_count:
                     logger.info(f"🧠 Stage 1b: Intelligent selection ({len(products)} -> {target_count})")
                     selection_result = await intelligent_product_selection(
@@ -316,6 +322,7 @@ Extract up to {target_count * 2} products."""
                             f"{[r.get('name', '') for r in rejected]}"
                         )
                 else:
+                    # We have fewer than target — keep all, let Stage 3 top-up
                     logger.info(f"Stage 1b skipped (only {len(products)} products, target {target_count})")
                 
                 # === Stage 1c: Tier Balance ===
@@ -1008,6 +1015,20 @@ def _validate_and_enrich(products: List[Dict], target_count: int) -> List[Dict]:
     
     # Sort by popularity score (highest first)
     validated.sort(key=lambda x: x.get("popularity_score", 0), reverse=True)
+
+    # After validating products, flag suspicious ones
+    suspicious = []
+    for p in validated:
+        name = p.get("name", "")
+        # Flag discontinued/generic names
+        if any(word in name.lower() for word in ["discontinued", "legacy", "old"]):
+            suspicious.append(p["name"])
+        # Flag very short names (likely generic)
+        if len(name.split()) < 2:
+            suspicious.append(p["name"])
+
+    if suspicious:
+        logger.warning(f"⚠️ Potentially hallucinated products: {suspicious}")
     
     return validated[:target_count]
 
