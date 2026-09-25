@@ -14,6 +14,7 @@ from app.config import logger
 from backend.llm.router import LLMRouter
 from backend.tools.content_analyzer import fetch_main_text
 from backend.tools.web_search import get_top_results
+from core.selectors.product_selector import _html_to_markdown
 
 # YouTube transcript extraction
 try:
@@ -285,22 +286,6 @@ async def _httpx_fetch(url: str) -> Optional[str]:
     return None
 
 
-def _html_to_text(html: str) -> str:
-    """Simple HTML to text conversion using BeautifulSoup."""
-    try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        for script in soup(["script", "style", "nav", "footer", "header"]):
-            script.decompose()
-        
-        text = soup.get_text(separator='\n', strip=True)
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        return '\n'.join(lines)
-    except Exception:
-        return ""
-
-
 async def _firecrawl_fetch_markdown(url: str) -> Optional[str]:
     """Fetch page via Firecrawl in markdown format.
     
@@ -355,7 +340,7 @@ async def _crawl_until_success(
     """Crawl URLs in rank order until target_count successes.
     
     Strategy:
-    1. Try httpx + BeautifulSoup first (FREE)
+    1. Try httpx + BeautifulSoup markdown conversion first (FREE, structured)
     2. If fails, try Firecrawl with markdown format (1 credit)
     3. STOP when target_count pages collected
     
@@ -375,18 +360,18 @@ async def _crawl_until_success(
         if "youtube.com" in url or "youtu.be" in url:
             continue
         
-        # Try 1: httpx (free)
+        # Try 1: httpx + markdown conversion (free)
         try:
             html = await _httpx_fetch(url)
-            if html and len(html) > 500:
-                text = _html_to_text(html)
-                if text and len(text) > 300:
+            if html and len(html) > 50:
+                markdown = _html_to_markdown(html)
+                if markdown and len(markdown) > 20:
                     successful_pages.append({
                         "url": url,
-                        "content": text,
+                        "content": markdown,
                         "source_type": "httpx",
                     })
-                    logger.info(f"Crawled via httpx: {url}")
+                    logger.info(f"Crawled via httpx (markdown): {url}")
                     continue
         except Exception as e:
             logger.debug(f"httpx failed for {url}: {e}")
@@ -394,7 +379,7 @@ async def _crawl_until_success(
         # Try 2: Firecrawl with markdown format (1 credit)
         try:
             markdown = await _firecrawl_fetch_markdown(url)
-            if markdown and len(markdown) > 300:
+            if markdown and len(markdown) > 200:
                 successful_pages.append({
                     "url": url,
                     "content": markdown,
@@ -405,8 +390,11 @@ async def _crawl_until_success(
         except Exception as e:
             logger.debug(f"Firecrawl failed for {url}: {e}")
     
+    httpx_count = sum(1 for p in successful_pages if p.get("source_type") == "httpx")
+    fc_count = sum(1 for p in successful_pages if p.get("source_type") == "firecrawl")
     logger.info(
-        f"Crawl complete: {len(successful_pages)}/{target_count} pages"
+        f"Crawl complete: {len(successful_pages)}/{target_count} pages "
+        f"(httpx+markdown: {httpx_count}, firecrawl: {fc_count})"
     )
     
     return successful_pages
