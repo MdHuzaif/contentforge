@@ -165,13 +165,20 @@ async def competitor_analysis_node(state: ContentForgeState) -> Dict[str, Any]:
             
             # === NEW: Save raw content for Level 2 product extraction ===
             if content and len(content) > 200:  # Only save if substantial content
+                h2s = headings.get("h2", []) if isinstance(headings, dict) else [h.get("text", h) for h in headings if isinstance(h, dict) and h.get("level") == 2]
+                h3s = headings.get("h3", []) if isinstance(headings, dict) else [h.get("text", h) for h in headings if isinstance(h, dict) and h.get("level") == 3]
+                if not h2s and isinstance(headings, list):
+                    h2s = [str(h) for h in headings][:15]
+                    h3s = []
+
                 scraped_articles.append({
                     "url": url,
                     "title": title or f"Competitor {len(scraped_articles) + 1}",
-                    "h2_titles": headings.get("h2", [])[:15],
-                    "h3_titles": headings.get("h3", [])[:25],  # <-- ADD H3s (Product Names)
-                    "tables": comp.get("tables", [])[:3],      # <-- ADD Tables
-                    "content_snippet": content[:1500],         # Reduce raw text, rely on structure
+                    "content": content,
+                    "h2_titles": h2s[:15],
+                    "h3_titles": h3s[:25],
+                    "tables": comp.get("tables", [])[:3],
+                    "content_snippet": content[:500],
                 })
             
             logger.info(f"Extracted structure from {url}: {len(headings.get('h2', []))} H2s")

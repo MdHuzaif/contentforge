@@ -643,6 +643,23 @@ def _html_to_markdown(html: str) -> str:
     return result
 
 
+def _extract_h2_h3(article: Dict[str, Any]) -> tuple[List[str], List[str]]:
+    """Helper to extract h2 and h3 headings with robust fallback across formats."""
+    h2s = article.get("h2_titles", []) or article.get("h2_headings", [])
+    h3s = article.get("h3_titles", []) or article.get("h3_headings", [])
+    if not h2s and not h3s:
+        headings = article.get("headings", [])
+        if isinstance(headings, list):
+            if headings and isinstance(headings[0], str):
+                h2s = headings[:15]
+                h3s = []
+            elif headings and isinstance(headings[0], dict):
+                h2s = [h.get("text", "") for h in headings if h.get("level") == 2][:15]
+                h3s = [h.get("text", "") for h in headings if h.get("level") == 3][:20]
+        elif isinstance(headings, dict):
+            h2s = headings.get("h2", [])[:15]
+            h3s = headings.get("h3", [])[:20]
+    return h2s, h3s
 def _build_competitor_content(competitor_data: Dict[str, Any]) -> str:
     """Build structured markdown from competitor scraped articles.
     
@@ -679,8 +696,7 @@ def _build_competitor_content(competitor_data: Dict[str, Any]) -> str:
                 section_parts.append(f"Table {t_idx + 1}:\n{table}")
         
         # 2. H2/H3 Headings (product names usually here)
-        h2s = article.get("h2_titles", []) or article.get("h2_headings", [])
-        h3s = article.get("h3_titles", []) or article.get("h3_headings", [])
+        h2s, h3s = _extract_h2_h3(article)
         if h2s or h3s:
             section_parts.append("\n**[ARTICLE STRUCTURE]**")
             for h in h2s[:15]:
@@ -745,8 +761,7 @@ def _build_structure_content(competitor_data: Dict[str, Any]) -> str:
     for i, article in enumerate(articles[:10], 1):
         url = article.get("url", "unknown")
         
-        h2s = article.get("h2_titles", []) or article.get("h2_headings", [])
-        h3s = article.get("h3_titles", []) or article.get("h3_headings", [])
+        h2s, h3s = _extract_h2_h3(article)
         
         if not h2s and not h3s:
             continue
