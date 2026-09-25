@@ -488,68 +488,226 @@ Return ONLY JSON:
         }
 
 
-def _build_competitor_content(competitor_data: Dict[str, Any]) -> str:
-    """Build structured text from competitor scraped content (Tables + Headings)."""
-    parts = []
-    competitors = competitor_data.get("scraped_articles", [])
-    if not competitors:
-        competitors = competitor_data.get("competitors", [])
+def _html_to_markdown(html: str) -> str:
+    """Convert HTML to structured markdown (like Firecrawl but free).
+    
+    Preserves:
+    - Headings (h1-h6 → # to ######)
+    - Lists (ul/ol → - or 1.)
+    - Bold/italic (strong/em → **/* )
+    - Links (a → [text](url))
+    - Tables (table → markdown table)
+    - Blockquotes (blockquote → >)
+    """
+    try:
+        from bs4 import BeautifulSoup, Tag, NavigableString
+    except ImportError:
+        return html
+    
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Remove unwanted elements
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside", "iframe"]):
+        tag.decompose()
+    
+    # Find main content area
+    main = (
+        soup.find("main") or 
+        soup.find("article") or 
+        soup.find("div", class_="content") or
+        soup.find("div", class_="article-body") or
+        soup.find("div", id="content") or
+        soup.body
+    )
+    
+    if not main:
+        main = soup
+    
+    markdown_lines = []
+    
+    def element_to_md(element) -> str:
+        if isinstance(element, NavigableString):
+            return str(element)
+        if not isinstance(element, Tag):
+            return ""
         
-    for i, comp in enumerate(competitors[:10], 1):  # Process up to 10 URLs
-        title = comp.get("title", "Untitled")
-        url = comp.get("url", "")
+        tag_name = element.name
         
-        parts.append(f"\n=== COMPETITOR {i}: {title} ({url}) ===")
+        if tag_name in ['strong', 'b']:
+            inner = "".join(element_to_md(c) for c in element.children).strip()
+            return f" **{inner}** " if inner else ""
+        if tag_name in ['em', 'i']:
+            inner = "".join(element_to_md(c) for c in element.children).strip()
+            return f" *{inner}* " if inner else ""
+        if tag_name == 'a':
+            inner = "".join(element_to_md(c) for c in element.children).strip()
+            href = element.get('href', '')
+            return f" [{inner}]({href}) " if inner and href else inner
         
-        # 1. Tables (Highest priority for product names & specs)
-        tables = comp.get("tables", [])
-        if tables:
-            parts.append("[QUICK COMPARISON TABLES]")
-            for t_idx, table in enumerate(tables[:2]):
-                parts.append(f"Table {t_idx+1}:\n{table}")
+        return "".join(element_to_md(c) for c in element.children)
+
+    def process_element(element):
+        if isinstance(element, NavigableString):
+            t = element.strip()
+            if t:
+                markdown_lines.append(t)
+            return
+        if not isinstance(element, Tag):
+            return
+        
+        tag_name = element.name
+        
+        # Headings
+        if tag_name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+            level = int(tag_name[1])
+            text = element_to_md(element).strip()
+            if text:
+                markdown_lines.append(f"\n{'#' * level} {text}\n")
+            return
+        
+        # Paragraphs
+        if tag_name == 'p':
+            text = element_to_md(element)
+            text = re.sub(r'\s+', ' ', text).strip()
+            if text:
+                markdown_lines.append(f"{text}\n")
+            return
+        
+        # Lists
+        if tag_name in ['ul', 'ol']:
+            for i, li in enumerate(element.find_all('li', recursive=False)):
+                text = element_to_md(li)
+                text = re.sub(r'\s+', ' ', text).strip()
+                if text:
+                    prefix = "-" if tag_name == 'ul' else f"{i+1}."
+                    markdown_lines.append(f"{prefix} {text}")
+            markdown_lines.append("")
+            return
+        
+        # Tables
+        if tag_name == 'table':
+            rows = element.find_all('tr')
+            if rows:
+                # Header row
+                header_cells = rows[0].find_all(['th', 'td'])
+                header = " | ".join(element_to_md(cell).strip() for cell in header_cells)
+                markdown_lines.append(f"| {header} |")
+                markdown_lines.append("|" + "---|" * len(header_cells))
                 
-        # 2. H2 & H3 Headings (Product names are usually H3)
-        h2s = comp.get("h2_titles", [])
-        h3s = comp.get("h3_titles", [])
-        if h2s or h3s:
-            parts.append("[ARTICLE STRUCTURE (H2/H3 HEADINGS)]")
-            for h in h2s: parts.append(f"H2: {h}")
-            for h in h3s: parts.append(f"H3: {h}")
-            
-        # 3. Short Intro Snippet (Context)
-        snippet = comp.get("content_snippet", comp.get("content", ""))[:1000]
-        if snippet:
-            parts.append(f"[INTRO EXCERPT]\n{snippet}")
+                # Data rows
+                for row in rows[1:]:
+                    cells = row.find_all(['th', 'td'])
+                    row_text = " | ".join(element_to_md(cell).strip() for cell in cells)
+                    markdown_lines.append(f"| {row_text} |")
+                markdown_lines.append("")
+            return
+        
+        # Blockquotes
+        if tag_name == 'blockquote':
+            text = element_to_md(element).strip()
+            if text:
+                for line in text.split('\n'):
+                    markdown_lines.append(f"> {line.strip()}")
+                markdown_lines.append("")
+            return
+        
+        # Recursively process children
+        for child in element.children:
+            process_element(child)
+    
+    # Start processing
+    process_element(main)
+    
+    # Clean up excessive newlines
+    result = '\n'.join(markdown_lines)
+    result = '\n'.join(line for line in result.split('\n') if line.strip() or line == '')
+    
+    return result
 
-    # Also check for raw content field if no competitors
-    if not parts:
-        raw_content = competitor_data.get("combined_content", "")
-        if raw_content:
-            parts.append(raw_content[:15000])
 
-    # Cap at 15000 chars to stay well within LLM context limits
-    full_text = "\n".join(parts)
-    return full_text[:15000]
+def _build_competitor_content(competitor_data: Dict[str, Any]) -> str:
+    """Build structured markdown from competitor scraped articles.
+    
+    Uses BeautifulSoup + custom converter to produce markdown-like output
+    similar to Firecrawl but completely FREE.
+    """
+    articles = competitor_data.get("scraped_articles", [])
+    if not articles:
+        articles = competitor_data.get("competitors", [])
+    
+    content_parts = []
+    
+    for i, article in enumerate(articles[:10], 1):  # Process up to 10 URLs
+        url = article.get("url", "unknown")
+        raw_content = article.get("content", "")
+        
+        if not raw_content:
+            continue
+        
+        # Check if content is HTML
+        is_html = raw_content.strip().startswith(("<!DOCTYPE", "<html", "<HTML", "<"))
+        
+        if is_html:
+            try:
+                # Convert HTML to structured markdown
+                markdown = _html_to_markdown(raw_content)
+                
+                # Truncate if too long (max 3000 chars per article)
+                if len(markdown) > 3000:
+                    markdown = markdown[:3000] + "\n\n... (content truncated)"
+                
+                content_parts.append(
+                    f"### Article {i}: {url}\n\n{markdown}\n\n---\n\n"
+                )
+                
+            except Exception as e:
+                logger.warning(f"Failed to parse HTML from {url}: {e}")
+                # Fallback to raw content (truncated)
+                content_parts.append(
+                    f"### Article {i}: {url}\n\n{raw_content[:1000]}\n\n---\n\n"
+                )
+        else:
+            # Content is already clean text
+            content_parts.append(
+                f"### Article {i}: {url}\n\n{raw_content}\n\n---\n\n"
+            )
+    
+    return "\n".join(content_parts)
 
 
 def _build_structure_content(competitor_data: Dict[str, Any]) -> str:
-    """Build content from competitor structure/headings."""
-    parts = []
+    """Build structure content from H2/H3 headings with clear hierarchy."""
+    articles = competitor_data.get("scraped_articles", [])
+    if not articles:
+        articles = competitor_data.get("competitors", [])
     
-    structure = competitor_data.get("optimal_structure", [])
-    if not structure:
-        structure = competitor_data.get("extracted_headings", [])
+    structure_parts = []
     
-    for section in structure[:30]:
-        title = section.get("title", "")
-        content = section.get("content", "")
+    for i, article in enumerate(articles[:10], 1):
+        url = article.get("url", "unknown")
+        h2s = article.get("h2_headings", []) or article.get("h2_titles", [])
+        h3s = article.get("h3_headings", []) or article.get("h3_titles", [])
         
-        if title:
-            parts.append(f"- {title}")
-            if content:
-                parts.append(f"  {content[:200]}")
+        if not h2s and not h3s:
+            continue
+        
+        structure_lines = [f"#### Article {i}: {url}\n"]
+        
+        if h2s:
+            structure_lines.append("**H2 Headings (Main Sections):**")
+            for h2 in h2s[:15]:  # Limit to 15 headings
+                structure_lines.append(f"- {h2}")
+            structure_lines.append("")
+        
+        if h3s:
+            structure_lines.append("**H3 Headings (Sub-sections - often product names):**")
+            for h3 in h3s[:20]:  # Limit to 20 headings
+                structure_lines.append(f"  - {h3}")
+            structure_lines.append("")
+        
+        structure_parts.append("\n".join(structure_lines))
     
-    return "\n".join(parts)
+    return "\n\n".join(structure_parts)
 
 
 def _parse_llm_response(response: str) -> Dict[str, Any]:
