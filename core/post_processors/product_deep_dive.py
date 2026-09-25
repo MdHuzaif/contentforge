@@ -117,7 +117,16 @@ async def _smart_search(product_name: str) -> Dict[str, Any]:
         return {"youtube_urls": [], "web_urls": [], "all_results": []}
     
     # Filter out blocked domains
-    blocked_domains = ["reddit.com", "amazon.com", "facebook.com", "twitter.com"]
+    blocked_domains = [
+    "reddit.com", "amazon.com", "facebook.com", "twitter.com",
+    # Job/company sites (NOT product reviews)
+    "indeed.com", "glassdoor.com", "linkedin.com", "cbinsights.com",
+    "ziprecruiter.com", "monster.com",
+    # Retail with thin reviews
+    "walmart.com", "target.com",
+    # Social/media
+    "instagram.com", "tiktok.com", "pinterest.com",
+   ]
     
     filtered = [
         r for r in results
