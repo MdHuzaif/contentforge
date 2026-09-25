@@ -239,10 +239,18 @@ async def extract_products_universal(
         logger.info(f"🔍 DEBUG: structure_content length = {len(structure_content)}")
         
         if competitor_content or structure_content:
-            if len(competitor_content) > 15000:
-                competitor_content = competitor_content[:15000] + "\n... (truncated)"
-            if len(structure_content) > 5000:
-                structure_content = structure_content[:5000] + "\n... (truncated)"
+            MAX_COMBINED = 12000  # Leave room for prompt + JSON response
+            total_size = len(competitor_content) + len(structure_content)
+
+            if total_size > MAX_COMBINED:
+                # Proportionally truncate
+                ratio = MAX_COMBINED / total_size
+                new_comp_len = int(len(competitor_content) * ratio)
+                new_struct_len = int(len(structure_content) * ratio)
+                
+                logger.info(f"🔍 Truncating combined content: {total_size} -> {MAX_COMBINED} chars")
+                competitor_content = competitor_content[:new_comp_len] + "\n... (truncated)"
+                structure_content = structure_content[:new_struct_len] + "\n... (truncated)"
             
             current_year = datetime.now().year
             prompt = EXTRACTION_PROMPT_TEMPLATE.format(
@@ -262,6 +270,30 @@ async def extract_products_universal(
             
             result = _parse_llm_response(response)
             products = _validate_and_enrich(result.get("products", []), target_count * 2)
+
+            # If Stage 1a failed (no products), retry with simpler prompt
+            if not products:
+                logger.warning("⚠️ Stage 1a returned 0 products, retrying with simpler prompt...")
+                
+                simple_prompt = f"""Extract product names from this content about "{topic}":
+
+{competitor_content[:5000]}
+
+Return ONLY JSON: {{"products": [{{"name": "Product Name", "brand": "Brand", "tier": "premium"}}]}}
+Extract up to {target_count * 2} products."""
+                
+                router = LLMRouter(task_type="competitor_analysis")
+                retry_response = await router.generate_text(
+                    prompt=simple_prompt,
+                    system_prompt="Return ONLY valid JSON.",
+                )
+                
+                retry_result = _parse_llm_response(retry_response)
+                products = _validate_and_enrich(retry_result.get("products", []), target_count * 2)
+                
+                if products:
+                    logger.info(f"✅ Stage 1a retry succeeded: {len(products)} products")
+                    result = retry_result
             
             if products:
                 extraction_method = "competitor_content"
@@ -649,13 +681,19 @@ def _extract_h2_h3(article: Dict[str, Any]) -> tuple[List[str], List[str]]:
     h3s = article.get("h3_titles", []) or article.get("h3_headings", [])
     if not h2s and not h3s:
         headings = article.get("headings", [])
-        if isinstance(headings, list):
+        if headings:
+            # If headings is a list of strings, treat all as H2
             if headings and isinstance(headings[0], str):
                 h2s = headings[:15]
                 h3s = []
+            # If headings is a list of dicts with "level"
+            elif headings and isinstance(headings[0], dict) and any("level" in h for h in headings):
+                h2s = [h.get("text", h.get("title", "")) for h in headings if h.get("level") == 2][:15]
+                h3s = [h.get("text", h.get("title", "")) for h in headings if h.get("level") == 3][:20]
+            # If headings is a list of dicts without "level" (assume H2)
             elif headings and isinstance(headings[0], dict):
-                h2s = [h.get("text", "") for h in headings if h.get("level") == 2][:15]
-                h3s = [h.get("text", "") for h in headings if h.get("level") == 3][:20]
+                h2s = [h.get("text", h.get("title", "")) for h in headings][:15]
+                h3s = []
         elif isinstance(headings, dict):
             h2s = headings.get("h2", [])[:15]
             h3s = headings.get("h3", [])[:20]
@@ -798,38 +836,54 @@ def _build_structure_content(competitor_data: Dict[str, Any]) -> str:
 
 
 def _parse_llm_response(response: str) -> Dict[str, Any]:
-    """Parse JSON from LLM response with multiple fallbacks."""
+    """Parse JSON from LLM response with multiple fallbacks and debug logging."""
+    
+    # DEBUG: Log raw response length and preview
+    logger.debug(f"🔍 DEBUG: LLM response length = {len(response or '')}")
+    if response:
+        logger.debug(f"🔍 DEBUG: LLM response preview = {response[:200]}...")
     
     # Try 1: Direct JSON parse
     try:
         return json.loads(response.strip())
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        logger.warning(f"Direct JSON parse failed: {e}")
     
     # Try 2: Extract JSON block from markdown fences
-    fence_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+    fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response, re.DOTALL)
     if fence_match:
         try:
-            return json.loads(fence_match.group(1))
-        except json.JSONDecodeError:
-            pass
+            parsed = json.loads(fence_match.group(1))
+            logger.info("✅ Extracted JSON from markdown fences")
+            return parsed
+        except json.JSONDecodeError as e:
+            logger.warning(f"Fence extraction failed: {e}")
     
     # Try 3: Find first { to last }
     brace_match = re.search(r'\{[\s\S]*\}', response)
     if brace_match:
         try:
-            return json.loads(brace_match.group(0))
-        except json.JSONDecodeError:
-            pass
+            parsed = json.loads(brace_match.group(0))
+            logger.info("✅ Extracted JSON from braces")
+            return parsed
+        except json.JSONDecodeError as e:
+            logger.warning(f"Brace extraction failed: {e}")
+            # DEBUG: Show what we tried to parse
+            logger.warning(f"Failed JSON (first 500 chars): {brace_match.group(0)[:500]}")
     
     # Try 4: Fix common JSON issues and retry
     cleaned = response.strip()
     cleaned = re.sub(r',\s*([\]}])', r'\1', cleaned)  # Trailing commas
     cleaned = re.sub(r'(\w+):', r'"\1":', cleaned)     # Unquoted keys
+    cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)  # Control chars
     try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        logger.warning("Could not parse LLM JSON response")
+        parsed = json.loads(cleaned)
+        logger.info("✅ Parsed after cleanup")
+        return parsed
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ All JSON parsing attempts failed: {e}")
+        # DEBUG: Show full response for debugging
+        logger.error(f"Full LLM response (first 1000 chars):\n{response[:1000]}")
         return {"products": []}
 
 

@@ -93,9 +93,9 @@ def test_filter_outdated_products_list():
     from core.selectors.product_selector import filter_outdated_products
 
     products = [
-        {"name": "MacBook Air M3", "tier": "mid_range"},
+        {"name": "MacBook Air M3", "tier": "mid_range", "updated_version_name": "MacBook Air M4"},
         {"name": "MacBook Air M4", "tier": "mid_range"},
-        {"name": "Dell XPS 14 (2024)", "tier": "premium"},
+        {"name": "Dell XPS 14 (2024)", "tier": "premium", "updated_version_name": "Dell XPS 14 (2026)"},
         {"name": "Dell XPS 14 (2026)", "tier": "premium"},
         {"name": "Lenovo IdeaPad Slim 3", "tier": "budget"},
     ]

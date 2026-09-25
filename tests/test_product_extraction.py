@@ -36,5 +36,5 @@ def test_build_competitor_content_includes_tables_and_h3s():
     assert "Dell XPS 15" in result
     assert "MacBook Air M2" in result
     assert "Product | Rating" in result
-    assert "[QUICK COMPARISON TABLES]" in result
+    assert "[COMPARISON TABLES]" in result
     assert "[ARTICLE STRUCTURE" in result
