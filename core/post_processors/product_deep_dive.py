@@ -176,23 +176,8 @@ async def _extract_youtube_transcript(url: str) -> Optional[str]:
         loop = asyncio.get_event_loop()
         
         def _fetch():
-            try:
-                res = YouTubeTranscriptApi.get_transcript(video_id)
-                if isinstance(res, list):
-                    return res
-                if hasattr(res, "fetch"):
-                    return res.fetch()
-                return res
-            except Exception as ex:
-                logger.debug(f"get_transcript error: {ex}")
-                if hasattr(YouTubeTranscriptApi, "list_transcripts"):
-                    transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                    try:
-                        transcript = transcript_list.find_transcript(['en'])
-                    except Exception:
-                        transcript = transcript_list.find_generated_transcript(['en'])
-                    return transcript.fetch()
-                raise
+            """v0.6.2 API call (exact version pinned in requirements.txt)."""
+            return YouTubeTranscriptApi.get_transcript(video_id)
         
         transcript_data = await loop.run_in_executor(None, _fetch)
         
