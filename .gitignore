@@ -95,3 +95,7 @@ wp-content/
 codebase_bundle.txt
 html-placement-test/
 
+
+# SQLite runtime files (DO NOT commit)
+backend/memory/shortterm_memory/*.db*
+backend/memory/shortterm_memory/thread_ids.json
