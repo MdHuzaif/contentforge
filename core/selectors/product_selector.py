@@ -676,28 +676,77 @@ def _html_to_markdown(html: str) -> str:
 
 
 def _extract_h2_h3(article: Dict[str, Any]) -> tuple[List[str], List[str]]:
-    """Helper to extract h2 and h3 headings with robust fallback across formats."""
-    h2s = article.get("h2_titles", []) or article.get("h2_headings", [])
-    h3s = article.get("h3_titles", []) or article.get("h3_headings", [])
-    if not h2s and not h3s:
-        headings = article.get("headings", [])
-        if headings:
-            # If headings is a list of strings, treat all as H2
-            if headings and isinstance(headings[0], str):
-                h2s = headings[:15]
-                h3s = []
-            # If headings is a list of dicts with "level"
-            elif headings and isinstance(headings[0], dict) and any("level" in h for h in headings):
-                h2s = [h.get("text", h.get("title", "")) for h in headings if h.get("level") == 2][:15]
-                h3s = [h.get("text", h.get("title", "")) for h in headings if h.get("level") == 3][:20]
-            # If headings is a list of dicts without "level" (assume H2)
-            elif headings and isinstance(headings[0], dict):
-                h2s = [h.get("text", h.get("title", "")) for h in headings][:15]
-                h3s = []
-        elif isinstance(headings, dict):
-            h2s = headings.get("h2", [])[:15]
-            h3s = headings.get("h3", [])[:20]
-    return h2s, h3s
+    """Extract H2 and H3 headings from article data.
+    
+    Handles multiple data formats:
+    - List of strings: ["Heading 1", "Heading 2"]
+    - List of dicts: [{"text": "Heading", "level": 2}, ...]
+    - Dict format: {"h2": [...], "h3": [...]}
+    - Empty/None: returns ([], [])
+    """
+    h2s = []
+    h3s = []
+    
+    # First, check for direct h2_titles/h2_headings/h3_titles/h3_headings fields (preferred)
+    raw_h2s = article.get("h2_titles") or article.get("h2_headings") or []
+    h2s = raw_h2s[:15] if isinstance(raw_h2s, list) else []
+    
+    raw_h3s = article.get("h3_titles") or article.get("h3_headings") or []
+    h3s = raw_h3s[:20] if isinstance(raw_h3s, list) else []
+    
+    # If we already have headings, return them
+    if h2s or h3s:
+        return h2s, h3s
+    
+    # Fallback: extract from "headings" field
+    headings = article.get("headings")
+    
+    # Handle None or empty
+    if not headings:
+        return [], []
+    
+    # Handle dict format: {"h2": [...], "h3": [...]}
+    if isinstance(headings, dict):
+        h2s = headings.get("h2", [])[:15] if isinstance(headings.get("h2"), list) else []
+        h3s = headings.get("h3", [])[:20] if isinstance(headings.get("h3"), list) else []
+        return h2s, h3s
+    
+    # Handle list format
+    if isinstance(headings, list):
+        if not headings:  # Empty list
+            return [], []
+        
+        # Check first element type (safely)
+        first = headings[0] if headings else None
+        
+        # List of strings
+        if isinstance(first, str):
+            # Treat all as H2 (no level info)
+            h2s = headings[:15]
+            return h2s, []
+        
+        # List of dicts with "level" field
+        if isinstance(first, dict):
+            for h in headings:
+                if not isinstance(h, dict):
+                    continue
+                text = h.get("text", h.get("title", ""))
+                level = h.get("level", 2)
+                
+                if not text:
+                    continue
+                
+                if level == 2:
+                    if len(h2s) < 15:
+                        h2s.append(text)
+                elif level == 3:
+                    if len(h3s) < 20:
+                        h3s.append(text)
+            return h2s, h3s
+    
+    # Unknown format: return empty
+    logger.debug(f"Unknown headings format: {type(headings)}")
+    return [], []
 def _build_competitor_content(competitor_data: Dict[str, Any]) -> str:
     """Build structured markdown from competitor scraped articles.
     
@@ -735,6 +784,10 @@ def _build_competitor_content(competitor_data: Dict[str, Any]) -> str:
         
         # 2. H2/H3 Headings (product names usually here)
         h2s, h3s = _extract_h2_h3(article)
+        if not isinstance(h2s, list):
+            h2s = []
+        if not isinstance(h3s, list):
+            h3s = []
         if h2s or h3s:
             section_parts.append("\n**[ARTICLE STRUCTURE]**")
             for h in h2s[:15]:
@@ -800,6 +853,10 @@ def _build_structure_content(competitor_data: Dict[str, Any]) -> str:
         url = article.get("url", "unknown")
         
         h2s, h3s = _extract_h2_h3(article)
+        if not isinstance(h2s, list):
+            h2s = []
+        if not isinstance(h3s, list):
+            h3s = []
         
         if not h2s and not h3s:
             continue
